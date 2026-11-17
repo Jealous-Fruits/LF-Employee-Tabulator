@@ -423,14 +423,15 @@ function toFlightPayload(row: EmployeeRow): Record<string, unknown> {
 }
 
 function App() {
-  const viewMode = useRef<ViewMode>(
+  const isRequestView =
     new URLSearchParams(window.location.search).get('view') === 'employee-request'
-      ? 'employee-request'
-      : 'flights',
+  const viewMode = useRef<ViewMode>(
+    isRequestView ? 'employee-request' : 'flights',
   )
   const tableElement = useRef<HTMLDivElement>(null)
   const table = useRef<Tabulator | null>(null)
   const formWindow = useRef<Window | null>(null)
+  const previewMode = useRef(false)
   const targetOrigin = useRef('*')
   const flightDefinitions = useRef(new Map<string, Record<string, unknown>>())
   const flightOptions = useRef<Record<string, string>>({})
@@ -440,7 +441,7 @@ function App() {
   const [rows, setRows] = useState<EmployeeRow[]>([])
   const [ready, setReady] = useState(false)
   const [message, setMessage] = useState(
-    viewMode.current === 'employee-request'
+    isRequestView
       ? 'Waiting for employee request data from Laserfiche'
       : 'Waiting for employee data from Laserfiche',
   )
@@ -572,6 +573,7 @@ function App() {
         const farmValues = payload.data?.farms
         const requestValues = payload.data?.requests
         if (!Array.isArray(farmValues)) return
+        previewMode.current = false
         const farms = [...new Set(farmValues.map((farm) => {
           if (typeof farm === 'string') return farm
           if (!farm || typeof farm !== 'object') return ''
@@ -599,6 +601,7 @@ function App() {
       const flightRows = payload.data?.flights
       if (!Array.isArray(flightRows)) return
 
+      previewMode.current = false
       const normalizedRows = buildGridRows(employeeRows, flightRows)
       const definitions = new Map<string, Record<string, unknown>>()
       for (const flight of flightRows) {
@@ -752,6 +755,16 @@ function App() {
     setChangeCount(changedRows.length)
 
     if (viewMode.current === 'employee-request') {
+      if (previewMode.current) {
+        originalRows.current = new Map(
+          changedRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
+        )
+        updatedRows.current.clear()
+        setChangeCount(0)
+        setSaveNotice('Employee request updates saved in preview.')
+        return
+      }
+
       const payload: RequestChangeSet = {
         type: 'employee-request:save',
         requests: (changedRows as RequestRow[]).map(toRequestPayload),
@@ -800,6 +813,51 @@ function App() {
       FullName: ['Morgan Chen', 'Avery Patel', 'Jordan Rivera', 'Riley Wilson'][index % 4],
       Status: ['Active', 'Leave', 'Active', 'Terminated'][index % 4],
     }))
+    previewMode.current = true
+    targetOrigin.current = window.location.origin
+
+    if (viewMode.current === 'employee-request') {
+      const farms = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
+      const requests = employees.flatMap((employee, index) => {
+        const status = [
+          '',
+          'Requested',
+          'Arrived',
+          'Request Return',
+          'Flight Booked',
+          'Return Flight Booked',
+        ][index % 6]
+        if (!status) return []
+
+        const isBooked = LOCKED_REQUEST_STATUSES.has(status)
+        const day = String((index % 27) + 1).padStart(2, '0')
+        return [{
+          Employee_Number: employee.Employee_Number,
+          Request_Status: status,
+          Farm: farms[index % farms.length],
+          Preferred_Arrival_By: { dateStr: `2026-12-${day}` },
+          Flight_Number: isBooked ? `LF${420 + (index % 4)}` : '',
+          Flight_Arrival: isBooked
+            ? { dateStr: `2026-12-${day}`, timeStr: '08:30:00 AM' }
+            : '',
+          Departure_Airport: isBooked ? 'YVR' : '',
+          Arrival_Airport: isBooked ? 'YYZ' : '',
+        }]
+      })
+      const sampleRows = buildRequestRows(employees, requests)
+      originalRows.current = new Map(
+        sampleRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
+      )
+      updatedRows.current.clear()
+      setChangeCount(0)
+      setColumns(requestColumns(farms))
+      setRows(sampleRows)
+      setRowCount(sampleRows.length)
+      setReady(true)
+      setMessage('')
+      return
+    }
+
     const flights = employees.slice(0, 4).map((employee, index) => ({
       Employee_Number: employee.Employee_Number,
       Flight_Number: `LF${420 + index}`,
@@ -811,7 +869,6 @@ function App() {
     }))
     flightDefinitions.current = new Map(flights.map((flight) => [String(flight.Flight_Number), flight]))
     setColumns(columnsForFlights(flights, flightOptions.current))
-    targetOrigin.current = window.location.origin
     const sampleRows = buildGridRows(employees, flights)
     originalRows.current = new Map(
       sampleRows.map((row) => [row.__lfRowId, flightSnapshot(row)]),
@@ -827,29 +884,31 @@ function App() {
     <main className="workspace">
       <header className="topbar">
         <div className="brand-mark" aria-hidden="true">LF</div>
-        <div className="brand-copy"><span>PEOPLE OPERATIONS</span><strong>{viewMode.current === 'employee-request' ? 'Employee requests' : 'Employee register'}</strong></div>
+        <div className="brand-copy"><span>PEOPLE OPERATIONS</span><strong>{isRequestView ? 'Employee requests' : 'Employee register'}</strong></div>
         <div className="connection"><span className={ready ? 'connection-dot is-live' : 'connection-dot'} />{ready ? 'Form connected' : 'Awaiting form data'}</div>
       </header>
 
       <section className="page-heading">
         <div>
-          <p className="eyebrow">DIRECTORY <span>/</span> {viewMode.current === 'employee-request' ? 'REQUESTS' : 'RECORDS'}</p>
-          <h1>{viewMode.current === 'employee-request' ? 'Employee requests' : 'Employee records'}</h1>
-          <p className="subheading">{viewMode.current === 'employee-request' ? 'Manage employee hiring requests. This form allows read/write for Request Status, Farm, and Requested Arrival, but is read only for employee and flight data.' : 'Review, update, and return changes to your form.'}</p>
+          <p className="eyebrow">DIRECTORY <span>/</span> {isRequestView ? 'REQUESTS' : 'RECORDS'}</p>
+          <h1>{isRequestView ? 'Employee requests' : 'Employee records'}</h1>
+          <p className="subheading">{isRequestView ? 'Manage employee hiring requests. This form allows read/write for Request Status, Farm, and Requested Arrival, but is read only for employee and flight data.' : 'Review, update, and return changes to your form.'}</p>
         </div>
         <div className="record-total"><strong>{rowCount.toLocaleString()}</strong><span>records</span></div>
       </section>
 
       <section className="table-section" aria-label="Employee records">
         <div className="table-toolbar">
-          <div className="table-title"><span className="section-index">01</span><h2>{viewMode.current === 'employee-request' ? 'Employee requests' : 'All employees'}</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
+          <div className="table-title"><span className="section-index">01</span><h2>{isRequestView ? 'Employee requests' : 'All employees'}</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
         </div>
         {!ready ? (
           <div className="empty-state">
             <div className="empty-mark" aria-hidden="true">↘</div>
             <strong>{message}</strong>
             <span>Waiting for columns and employee rows.</span>
-            {viewMode.current === 'flights' && <button className="sample-link" type="button" onClick={loadSample}>Preview with 3,000 sample records</button>}
+            <button className="sample-link" type="button" onClick={loadSample}>
+              {isRequestView ? 'Preview with 3,000 sample requests' : 'Preview with 3,000 sample records'}
+            </button>
           </div>
         ) : (
           <div className="table-host"><div ref={tableElement} /></div>
@@ -863,7 +922,7 @@ function App() {
       <div className="save-bar">
         <span>{saveNotice || (changeCount ? `${changeCount} change${changeCount === 1 ? '' : 's'} ready to send` : 'No changes to send yet')}</span>
         <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || !changeCount || saving}>
-          {saving ? 'Changes sent' : viewMode.current === 'employee-request' ? 'Save requests' : 'Save changes'} <span aria-hidden="true">↗</span>
+          {saving ? 'Changes sent' : isRequestView ? 'Save requests' : 'Save changes'} <span aria-hidden="true">↗</span>
         </button>
       </div>
       <div className="page-foot"><span>LASERFICHE CLOUD FORM INTEGRATION</span><span>EMPLOYEE DATA</span></div>
