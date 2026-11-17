@@ -421,6 +421,16 @@
   white-space: nowrap;
 }
 
+.tabulator .tabulator-cell.is-editable {
+  background-color: #f1f6f2;
+  box-shadow: inset 0 -2px 0 #b6cdbd;
+  cursor: pointer;
+}
+
+.tabulator .tabulator-cell.is-editable:hover {
+  background-color: #e7f0e9;
+}
+
 .tabulator .tabulator-cell.tabulator-editing {
   border: 1px solid #45876f;
   background: #fff;

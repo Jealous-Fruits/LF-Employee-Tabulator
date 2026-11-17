@@ -20,15 +20,18 @@ type RequestChangeSet = {
 }
 
 type ViewMode = 'flights' | 'employee-request'
-type GridDateTime = { dateStr: string; timeStr?: string }
+type UserRole = 'HR' | 'Manager'
 type RequestRow = EmployeeRow & {
   Request_Status: string
   Farm: string
   Preferred_Arrival_By: string
   Flight_Number: string
-  Flight_Arrival: GridDateTime | ''
-  Departure_Airport: string
-  Arrival_Airport: string
+  Flight_Carrier: string
+  Flight_Origin: string
+  Flight_Destination: string
+  Flight_Date: string
+  Flight_Time: string
+  Flight_Type: string
 }
 
 const FLIGHT_FIELDS = [
@@ -53,38 +56,23 @@ const REQUEST_FIELDS = [
   'Request_Status',
   'Farm',
   'Preferred_Arrival_By',
-  'Flight_Number',
-  'Flight_Arrival',
-  'Departure_Airport',
-  'Arrival_Airport',
+  ...FLIGHT_FIELDS,
 ] as const
 
 function requestSnapshot(row: EmployeeRow): string {
   return JSON.stringify(REQUEST_FIELDS.map((field) => row[field] ?? ''))
 }
 
-function dateTimeForGrid(value: unknown): GridDateTime | '' {
-  const dateStr = dateForGrid(value)
-  if (!dateStr) return ''
-  const timeStr = timeForGrid(value)
-  return { dateStr, ...(timeStr ? { timeStr } : {}) }
-}
-
-function dateTimeForDisplay(value: unknown): string {
-  if (!value || typeof value !== 'object' || !('dateStr' in value)) {
-    return dateForGrid(value)
-  }
-  const dateStr = String(value.dateStr ?? '')
-  const timeStr = String('timeStr' in value ? value.timeStr ?? '' : '')
-  return [dateStr, timeStr].filter(Boolean).join(' ')
-}
-
 function buildRequestRows(
   employees: Record<string, unknown>[],
   requests: Record<string, unknown>[] = [],
+  flights: Record<string, unknown>[] = [],
 ): RequestRow[] {
   const requestByEmployee = new Map(
     requests.map((request) => [String(request.Employee_Number ?? ''), request]),
+  )
+  const flightByNumber = new Map(
+    flights.map((flight) => [String(flight.Flight_Number ?? ''), flight]),
   )
 
   return employees.map((employee, index) => {
@@ -92,6 +80,9 @@ function buildRequestRows(
       employee.Employee_Number ?? employee.EmployeeNumber ?? employee.employeeNumber ?? '',
     )
     const request = requestByEmployee.get(employeeNumber) ?? {}
+    const flightNumber = String(request.Flight_Number ?? '')
+    const flight = flightByNumber.get(flightNumber) ?? {}
+    const flightDate = flight.Flight_Date ?? request.Flight_Date ?? request.Flight_Arrival
     return {
       Employee_Number: employeeNumber,
       FullName: String(employee.FullName ?? employee.fullName ?? ''),
@@ -99,10 +90,18 @@ function buildRequestRows(
       Request_Status: String(request.Request_Status ?? ''),
       Farm: String(request.Farm ?? ''),
       Preferred_Arrival_By: dateForGrid(request.Preferred_Arrival_By),
-      Flight_Number: String(request.Flight_Number ?? ''),
-      Flight_Arrival: dateTimeForGrid(request.Flight_Arrival),
-      Departure_Airport: String(request.Departure_Airport ?? ''),
-      Arrival_Airport: String(request.Arrival_Airport ?? ''),
+      Flight_Number: flightNumber,
+      Flight_Carrier: String(flight.Flight_Carrier ?? request.Flight_Carrier ?? ''),
+      Flight_Origin: String(
+        flight.Flight_Origin ?? request.Flight_Origin ?? request.Departure_Airport ?? '',
+      ),
+      Flight_Destination: String(
+        flight.Flight_Destination ?? request.Flight_Destination ?? request.Arrival_Airport ?? '',
+      ),
+      Flight_Date: dateForGrid(flightDate),
+      Flight_Time: timeForGrid(flightDate) ||
+        laserTimeToInput(String(flight.Flight_Time ?? request.Flight_Time ?? '')),
+      Flight_Type: String(flight.Flight_Type ?? request.Flight_Type ?? ''),
       __lfRowId: `request-${index}`,
       __lfLocked: true,
     }
@@ -117,7 +116,7 @@ function toRequestPayload(row: RequestRow): Record<string, unknown> {
     Farm: row.Farm,
     Preferred_Arrival_By: dateTimeForLaser(row.Preferred_Arrival_By, ''),
     Flight_Number: row.Flight_Number,
-    Flight_Arrival: dateTimeForLaser(row.Flight_Arrival, ''),
+    Flight_Arrival: dateTimeForLaser(row.Flight_Date, row.Flight_Time),
   }
 }
 
@@ -237,16 +236,111 @@ const REQUEST_STATUS_TRANSITIONS: Record<string, string[]> = {
   'Request Return': ['Arrived'],
 }
 const LOCKED_REQUEST_STATUSES = new Set(['Flight Booked', 'Return Flight Booked'])
+const FLIGHT_EDITABLE_REQUEST_STATUSES = new Set(['Requested', 'Request Return'])
+const EMPTY_REQUEST_STATUS_FILTER = '__empty_request_status__'
+
+function allowedRequestStatusTransitions(role: UserRole | null, status: string): string[] {
+  if (role === 'HR') {
+    if (status === 'Requested') return ['Flight Booked']
+    if (status === 'Request Return') return ['Return Flight Booked']
+    return []
+  }
+  if (role === 'Manager') {
+    return (REQUEST_STATUS_TRANSITIONS[status] ?? []).filter(
+      (nextStatus) => nextStatus === 'Requested' || nextStatus === 'Request Return',
+    )
+  }
+  return []
+}
+
+function isCellEditable(
+  viewMode: ViewMode,
+  role: UserRole | null,
+  rowData: EmployeeRow,
+  field: string,
+  columnEditable: boolean,
+): boolean {
+  if (viewMode === 'employee-request') {
+    const requestStatus = String(rowData.Request_Status ?? '').trim()
+    const isBooked = LOCKED_REQUEST_STATUSES.has(requestStatus)
+    if (field === 'Request_Status') {
+      return allowedRequestStatusTransitions(role, requestStatus).length > 0
+    }
+    if (role === 'HR' && field === 'Flight_Number') {
+      return FLIGHT_EDITABLE_REQUEST_STATUSES.has(requestStatus)
+    }
+    if (
+      role === 'HR' &&
+      (FLIGHT_DEFINITION_FIELDS as readonly string[]).includes(field)
+    ) {
+      return FLIGHT_EDITABLE_REQUEST_STATUSES.has(requestStatus) &&
+        Boolean(rowData.Flight_Number)
+    }
+    if (role !== 'Manager') return false
+    if (requestStatus === 'Arrived') return false
+    if (field === 'Farm') return Boolean(requestStatus)
+    if (field === 'Preferred_Arrival_By') {
+      return Boolean(requestStatus) && !isBooked
+    }
+    return false
+  }
+  return columnEditable && !rowData.__lfLocked
+}
+
+function updateEditableCellStyles(
+  row: RowComponent,
+  viewMode: ViewMode,
+  role: UserRole | null,
+) {
+  const rowData = row.getData() as EmployeeRow
+  for (const cell of row.getCells()) {
+    const columnEditable = cell.getColumn().getDefinition().editable !== false
+    cell.getElement().classList.toggle(
+      'is-editable',
+      isCellEditable(viewMode, role, rowData, String(cell.getField()), columnEditable),
+    )
+  }
+}
+
+function headerSelectFilter(options: { label: string; value: string }[]) {
+  return (
+    cell: CellComponent,
+    _onRendered: (callback: () => void) => void,
+    success: (value: unknown) => boolean,
+  ): HTMLSelectElement => {
+    const select = document.createElement('select')
+    const allOption = document.createElement('option')
+    allOption.value = ''
+    allOption.textContent = 'All'
+    select.append(allOption)
+
+    for (const { label, value } of options) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = label
+      select.append(option)
+    }
+
+    select.value = String(cell.getValue() ?? '')
+    select.style.width = '100%'
+    select.addEventListener('change', () => success(select.value))
+    return select
+  }
+}
 
 function requestStatusEditor(
   cell: CellComponent,
   onRendered: (callback: () => void) => void,
   success: (value: unknown) => boolean,
   cancel: (value: unknown) => void,
+  role: UserRole,
 ): HTMLSelectElement {
   const currentStatus = String(cell.getValue() ?? '')
   const select = document.createElement('select')
-  const values = [currentStatus, ...(REQUEST_STATUS_TRANSITIONS[currentStatus] ?? [])]
+  const values = [
+    currentStatus,
+    ...allowedRequestStatusTransitions(role, currentStatus),
+  ]
   let completed = false
 
   for (const value of new Set(values)) {
@@ -290,7 +384,15 @@ const GRID_COLUMNS: ColumnDefinition[] = [
   { title: 'Carrier', field: 'Flight_Carrier', minWidth: 120, widthGrow: 1.3 },
   { title: 'Origin', field: 'Flight_Origin', minWidth: 90, widthGrow: 0.8 },
   { title: 'Destination', field: 'Flight_Destination', minWidth: 110, widthGrow: 1.0 },
-  { title: 'Flight date', field: 'Flight_Date', minWidth: 120, widthGrow: 1.0, editor: 'date' },
+  {
+    title: 'Flight date',
+    field: 'Flight_Date',
+    minWidth: 120,
+    widthGrow: 1.0,
+    editor: 'date',
+    headerFilter: 'date',
+    headerFilterPlaceholder: 'Filter by date',
+  },
   { title: 'Flight time', field: 'Flight_Time', minWidth: 82, widthGrow: 0.8, editor: 'time' },
   {
     title: 'Flight type',
@@ -302,7 +404,11 @@ const GRID_COLUMNS: ColumnDefinition[] = [
   },
 ]
 
-function requestColumns(farms: string[]): ColumnDefinition[] {
+function requestColumns(
+  farms: string[],
+  flightOptions: Record<string, string>,
+  role: UserRole,
+): ColumnDefinition[] {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
   const minDate = [
@@ -314,13 +420,36 @@ function requestColumns(farms: string[]): ColumnDefinition[] {
   return [
     { title: 'Employee number', field: 'Employee_Number', minWidth: 112, widthGrow: 1.1, editable: false },
     { title: 'Full name', field: 'FullName', minWidth: 150, widthGrow: 1.5, editable: false },
-    { title: 'Current status', field: 'Status', minWidth: 100, widthGrow: 0.9, editable: false },
+    {
+      title: 'Current status',
+      field: 'Status',
+      minWidth: 100,
+      widthGrow: 0.9,
+      editable: false,
+      headerFilter: headerSelectFilter([
+        { label: 'Active', value: 'Active' },
+        { label: 'Terminated', value: 'Terminated' },
+      ]),
+    },
     {
       title: 'Request status',
       field: 'Request_Status',
       minWidth: 135,
       widthGrow: 1.1,
-      editor: requestStatusEditor,
+      editor: (cell, onRendered, success, cancel) =>
+        requestStatusEditor(cell, onRendered, success, cancel, role),
+      headerFilter: headerSelectFilter([
+        { label: 'Blank', value: EMPTY_REQUEST_STATUS_FILTER },
+        { label: 'Requested', value: 'Requested' },
+        { label: 'Arrived', value: 'Arrived' },
+        { label: 'Request Return', value: 'Request Return' },
+        { label: 'Flight Booked', value: 'Flight Booked' },
+        { label: 'Return Flight Booked', value: 'Return Flight Booked' },
+      ]),
+      headerFilterFunc: (filterValue, rowValue) =>
+        filterValue === EMPTY_REQUEST_STATUS_FILTER
+          ? !String(rowValue ?? '').trim()
+          : String(rowValue ?? '').trim() === filterValue,
     },
     {
       title: 'Farm',
@@ -337,17 +466,38 @@ function requestColumns(farms: string[]): ColumnDefinition[] {
       widthGrow: 1.2,
       editor: 'date',
       editorParams: { min: minDate },
+      headerFilter: 'date',
+      headerFilterPlaceholder: 'Filter by date',
     },
-    { title: 'Flight number', field: 'Flight_Number', minWidth: 120, widthGrow: 1.1 },
     {
-      title: 'Flight Arrival/Departure',
-      field: 'Flight_Arrival',
-      minWidth: 175,
-      widthGrow: 1.2,
-      formatter: (cell: CellComponent) => dateTimeForDisplay(cell.getValue()),
+      title: 'Flight number',
+      field: 'Flight_Number',
+      minWidth: 120,
+      widthGrow: 1.1,
+      editor: (cell, onRendered, success, cancel) =>
+        flightNumberEditor(cell, onRendered, success, cancel, flightOptions),
     },
-    { title: 'Departure airport', field: 'Departure_Airport', minWidth: 130, widthGrow: 1.0 },
-    { title: 'Arrival airport', field: 'Arrival_Airport', minWidth: 130, widthGrow: 1.0 },
+    { title: 'Carrier', field: 'Flight_Carrier', minWidth: 120, widthGrow: 1.3 },
+    { title: 'Origin', field: 'Flight_Origin', minWidth: 90, widthGrow: 0.8 },
+    { title: 'Destination', field: 'Flight_Destination', minWidth: 110, widthGrow: 1.0 },
+    {
+      title: 'Flight date',
+      field: 'Flight_Date',
+      minWidth: 120,
+      widthGrow: 1.0,
+      editor: 'date',
+      headerFilter: 'date',
+      headerFilterPlaceholder: 'Filter by date',
+    },
+    { title: 'Flight time', field: 'Flight_Time', minWidth: 82, widthGrow: 0.8, editor: 'time' },
+    {
+      title: 'Flight type',
+      field: 'Flight_Type',
+      minWidth: 100,
+      widthGrow: 0.9,
+      editor: 'list',
+      editorParams: { values: ['Arrival', 'Departure'] },
+    },
   ]
 }
 
@@ -432,10 +582,12 @@ function App() {
   const table = useRef<Tabulator | null>(null)
   const formWindow = useRef<Window | null>(null)
   const previewMode = useRef(false)
+  const role = useRef<UserRole | null>(null)
   const targetOrigin = useRef('*')
   const flightDefinitions = useRef(new Map<string, Record<string, unknown>>())
   const flightOptions = useRef<Record<string, string>>({})
   const originalRows = useRef(new Map<string, string>())
+  const originalFlightRows = useRef(new Map<string, string>())
   const updatedRows = useRef(new Map<string, EmployeeRow>())
   const [columns, setColumns] = useState<ColumnDefinition[]>([])
   const [rows, setRows] = useState<EmployeeRow[]>([])
@@ -502,7 +654,8 @@ function App() {
       Flight_Origin: definition.Flight_Origin ?? '',
       Flight_Destination: definition.Flight_Destination ?? '',
       Flight_Date: dateForGrid(definition.Flight_Date),
-      Flight_Time: timeForGrid(definition.Flight_Date),
+      Flight_Time: timeForGrid(definition.Flight_Date) ||
+        laserTimeToInput(String(definition.Flight_Time ?? '')),
       Flight_Type: definition.Flight_Type ?? '',
     })
   }
@@ -563,6 +716,7 @@ function App() {
           flights?: unknown
           farms?: unknown
           requests?: unknown
+          Role?: unknown
         }
       }
       if (payload.view && payload.view !== viewMode.current) return
@@ -570,6 +724,15 @@ function App() {
       if (!Array.isArray(employeeRows)) return
 
       if (viewMode.current === 'employee-request') {
+        const receivedRole = payload.data?.Role
+        if (receivedRole !== 'HR' && receivedRole !== 'Manager') {
+          role.current = null
+          setReady(false)
+          setRowCount(0)
+          setMessage('Employee request data must include Role "HR" or "Manager".')
+          return
+        }
+        role.current = receivedRole
         const farmValues = payload.data?.farms
         const requestValues = payload.data?.requests
         if (!Array.isArray(farmValues)) return
@@ -581,16 +744,40 @@ function App() {
           return String(entry.Farm ?? entry.Farm_Name ?? entry.Name ?? entry.data ?? '')
         }).filter(Boolean))]
         const requestRows = Array.isArray(requestValues) ? requestValues : []
-        const normalizedRows = buildRequestRows(employeeRows, requestRows)
+        const flightRows = Array.isArray(payload.data?.flights) ? payload.data.flights : []
+        const normalizedRows = buildRequestRows(employeeRows, requestRows, flightRows)
+        const definitions = new Map<string, Record<string, unknown>>()
+        for (const flight of flightRows) {
+          const flightNumber = String(flight.Flight_Number ?? '')
+          if (flightNumber && !definitions.has(flightNumber)) {
+            definitions.set(flightNumber, flight)
+          }
+        }
+        for (const row of normalizedRows) {
+          if (row.Flight_Number && !definitions.has(row.Flight_Number)) {
+            definitions.set(row.Flight_Number, {
+              Flight_Number: row.Flight_Number,
+              ...flightDefinition(row),
+            })
+          }
+        }
+        flightDefinitions.current = definitions
+        for (const key of Object.keys(flightOptions.current)) delete flightOptions.current[key]
+        for (const flightNumber of definitions.keys()) {
+          flightOptions.current[flightNumber] = flightNumber
+        }
 
         targetOrigin.current = event.origin === 'null' ? '*' : event.origin
         if (event.source) formWindow.current = event.source as Window
         originalRows.current = new Map(
           normalizedRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
         )
+        originalFlightRows.current = new Map(
+          normalizedRows.map((row) => [row.__lfRowId, flightSnapshot(row)]),
+        )
         updatedRows.current.clear()
         setChangeCount(0)
-        setColumns(requestColumns(farms))
+        setColumns(requestColumns(farms, flightOptions.current, receivedRole))
         setRows(normalizedRows)
         setRowCount(normalizedRows.length)
         setReady(true)
@@ -637,22 +824,13 @@ function App() {
       ...column,
       editor: column.editor ?? 'input',
       editable: (cell: { getRow: () => RowComponent; getField: () => string }) => {
-        const rowData = cell.getRow().getData()
-        if (viewMode.current === 'employee-request') {
-          const field = cell.getField()
-          const requestStatus = String(rowData.Request_Status ?? '').trim()
-          const isBooked = LOCKED_REQUEST_STATUSES.has(requestStatus)
-          if (field === 'Request_Status') {
-            return !isBooked && Object.hasOwn(REQUEST_STATUS_TRANSITIONS, requestStatus)
-          }
-          if (requestStatus === 'Arrived') return false
-          if (field === 'Farm') return Boolean(requestStatus)
-          if (field === 'Preferred_Arrival_By') {
-            return Boolean(requestStatus) && !isBooked
-          }
-          return false
-        }
-        return column.editable !== false && !rowData.__lfLocked
+        return isCellEditable(
+          viewMode.current,
+          role.current,
+          cell.getRow().getData() as EmployeeRow,
+          cell.getField(),
+          column.editable !== false,
+        )
       },
       headerFilter: column.headerFilter ?? 'input',
     }))
@@ -690,6 +868,8 @@ function App() {
       resizableColumnFit: true,
       reactiveData: false,
       columnDefaults: { vertAlign: 'middle', tooltip: true },
+      rowFormatter: (row) =>
+        updateEditableCellStyles(row, viewMode.current, role.current),
     })
 
     grid.on('cellEdited', (cell: CellComponent) => {
@@ -699,7 +879,8 @@ function App() {
         const oldFlightNumber = String(cell.getOldValue() ?? '')
         const flightNumber = String(cell.getValue() ?? '')
         const definition = flightDefinitions.current.get(flightNumber)
-        const targets = oldFlightNumber && oldFlightNumber !== flightNumber
+        const targets = viewMode.current !== 'employee-request' &&
+          oldFlightNumber && oldFlightNumber !== flightNumber
           ? matchingFlightRows(oldFlightNumber, row.getData().__lfRowId)
           : []
         const affectedRows = [row, ...targets]
@@ -730,6 +911,9 @@ function App() {
       }
       trackUpdate(rowData)
     })
+    grid.on('cellEdited', (cell: CellComponent) => {
+      updateEditableCellStyles(cell.getRow(), viewMode.current, role.current)
+    })
     grid.on('rowAdded', () => setRowCount(grid.getDataCount()))
     grid.on('rowDeleted', () => setRowCount(grid.getDataCount()))
     table.current = grid
@@ -755,14 +939,43 @@ function App() {
     setChangeCount(changedRows.length)
 
     if (viewMode.current === 'employee-request') {
+      const flightChangedRows = changedRows.filter((row) => {
+        const original = originalFlightRows.current.get(row.__lfRowId)
+        return original === undefined || original !== flightSnapshot(row)
+      })
+
       if (previewMode.current) {
-        originalRows.current = new Map(
-          changedRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
-        )
+        for (const row of changedRows) {
+          originalRows.current.set(row.__lfRowId, requestSnapshot(row))
+          originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
+        }
         updatedRows.current.clear()
         setChangeCount(0)
         setSaveNotice('Employee request updates saved in preview.')
         return
+      }
+
+      const invalidFlightRows = flightChangedRows.filter((row) => {
+        const deletionMarker = FLIGHT_FIELDS.every(
+          (field) => row[field] == null || row[field] === '',
+        )
+        return !row.Employee_Number ||
+          (!deletionMarker && (
+            !row.Flight_Number ||
+            !['Arrival', 'Departure'].includes(String(row.Flight_Type))
+          ))
+      })
+      if (invalidFlightRows.length) {
+        setSaveNotice('Choose an existing flight number or enter valid flight details before saving requests.')
+        return
+      }
+
+      if (flightChangedRows.length) {
+        const flightPayload: ChangeSet = {
+          type: 'employee-tabulator:save',
+          flights: flightChangedRows.map(toFlightPayload),
+        }
+        ;(formWindow.current ?? window.parent).postMessage(flightPayload, targetOrigin.current)
       }
 
       const payload: RequestChangeSet = {
@@ -817,7 +1030,16 @@ function App() {
     targetOrigin.current = window.location.origin
 
     if (viewMode.current === 'employee-request') {
+      role.current = 'HR'
       const farms = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
+      const flights = Array.from({ length: 4 }, (_, index) => ({
+        Flight_Number: `LF${420 + index}`,
+        Flight_Carrier: 'Northstar Air',
+        Flight_Origin: 'YVR',
+        Flight_Destination: 'YYZ',
+        Flight_Date: { dateStr: '2026-12-01', timeStr: '08:30:00 AM' },
+        Flight_Type: 'Arrival',
+      }))
       const requests = employees.flatMap((employee, index) => {
         const status = [
           '',
@@ -830,27 +1052,39 @@ function App() {
         if (!status) return []
 
         const isBooked = LOCKED_REQUEST_STATUSES.has(status)
+        const hasFlight = isBooked ||
+          (FLIGHT_EDITABLE_REQUEST_STATUSES.has(status) && index % 2 === 1)
         const day = String((index % 27) + 1).padStart(2, '0')
         return [{
           Employee_Number: employee.Employee_Number,
           Request_Status: status,
           Farm: farms[index % farms.length],
           Preferred_Arrival_By: { dateStr: `2026-12-${day}` },
-          Flight_Number: isBooked ? `LF${420 + (index % 4)}` : '',
-          Flight_Arrival: isBooked
+          Flight_Number: hasFlight ? `LF${420 + (index % 4)}` : '',
+          Flight_Arrival: hasFlight
             ? { dateStr: `2026-12-${day}`, timeStr: '08:30:00 AM' }
             : '',
-          Departure_Airport: isBooked ? 'YVR' : '',
-          Arrival_Airport: isBooked ? 'YYZ' : '',
+          Departure_Airport: hasFlight ? 'YVR' : '',
+          Arrival_Airport: hasFlight ? 'YYZ' : '',
         }]
       })
-      const sampleRows = buildRequestRows(employees, requests)
+      const sampleRows = buildRequestRows(employees, requests, flights)
+      flightDefinitions.current = new Map(
+        flights.map((flight) => [String(flight.Flight_Number), flight]),
+      )
+      for (const key of Object.keys(flightOptions.current)) delete flightOptions.current[key]
+      for (const flight of flights) {
+        flightOptions.current[String(flight.Flight_Number)] = String(flight.Flight_Number)
+      }
       originalRows.current = new Map(
         sampleRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
       )
+      originalFlightRows.current = new Map(
+        sampleRows.map((row) => [row.__lfRowId, flightSnapshot(row)]),
+      )
       updatedRows.current.clear()
       setChangeCount(0)
-      setColumns(requestColumns(farms))
+      setColumns(requestColumns(farms, flightOptions.current, 'HR'))
       setRows(sampleRows)
       setRowCount(sampleRows.length)
       setReady(true)
@@ -892,7 +1126,7 @@ function App() {
         <div>
           <p className="eyebrow">DIRECTORY <span>/</span> {isRequestView ? 'REQUESTS' : 'RECORDS'}</p>
           <h1>{isRequestView ? 'Employee requests' : 'Employee records'}</h1>
-          <p className="subheading">{isRequestView ? 'Manage employee hiring requests. This form allows read/write for Request Status, Farm, and Requested Arrival, but is read only for employee and flight data.' : 'Review, update, and return changes to your form.'}</p>
+          <p className="subheading">{isRequestView ? 'Manage employee hiring requests and flight details for requested employees.' : 'Review, update, and return changes to your form.'}</p>
         </div>
         <div className="record-total"><strong>{rowCount.toLocaleString()}</strong><span>records</span></div>
       </section>
