@@ -1,3 +1,37 @@
+const FIELD_IDS = Object.freeze({
+  employeeTable: 93,
+  employeeTableReady: 97,
+  flight: {
+    employeeNumber: 100,
+    number: 101,
+    carrier: 102,
+    origin: 103,
+    destination: 104,
+    date: 105,
+    type: 106,
+  },
+  request: {
+    role: 110,
+    farmTable: 112,
+    outputTable: 71,
+    output: {
+      employeeNumber: 72,
+      status: 74,
+      farm: 75,
+      preferredArrival: 76,
+      flightNumber: 77,
+      carrier: 113,
+      origin: 114,
+      destination: 115,
+      flightDateTime: 116,
+      flightType: 117,
+    },
+    flightStatus: 80,
+    flightFarm: 82,
+    requestedArrival: 83,
+  },
+});
+
 function debounce(func, delay = 500) {
   let timeoutId;
 
@@ -56,16 +90,13 @@ function toTabulatorData(input) {
 
 const TABULATOR_ORIGIN = "https://daletools.github.io";
 let tabulatorWindow = null;
-let requestTabulatorWindow = null;
 let helloTimer = null;
 let employeeTableReady = false;
 let flightLookupReady = false;
 let farmTableReady = false;
+let roleReady = false;
 let initialDataSent = false;
-let requestDataSent = false;
 let helloScanLogged = false;
-const connectedViews = new Set();
-let allConnectionsLogged = false;
 
 console.info("[LF bridge] script started", {
   origin: window.location.origin,
@@ -80,16 +111,16 @@ function readTableColumn(fieldId) {
 
 function readFlightRows() {
   const fields = {
-    Employee_Number: readTableColumn(51),
-    Flight_Number: readTableColumn(52),
-    Flight_Carrier: readTableColumn(53),
-    Flight_Origin: readTableColumn(54),
-    Flight_Destination: readTableColumn(55),
-    Flight_Date: readTableColumn(56),
-    Flight_Type: readTableColumn(57),
-    Request_Status: readTableColumn(80),
-    Farm: readTableColumn(82),
-    Requested_Arrival: readTableColumn(83),
+    Employee_Number: readTableColumn(FIELD_IDS.flight.employeeNumber),
+    Flight_Number: readTableColumn(FIELD_IDS.flight.number),
+    Flight_Carrier: readTableColumn(FIELD_IDS.flight.carrier),
+    Flight_Origin: readTableColumn(FIELD_IDS.flight.origin),
+    Flight_Destination: readTableColumn(FIELD_IDS.flight.destination),
+    Flight_Date: readTableColumn(FIELD_IDS.flight.date),
+    Flight_Type: readTableColumn(FIELD_IDS.flight.type),
+    Request_Status: readTableColumn(FIELD_IDS.request.flightStatus),
+    Farm: readTableColumn(FIELD_IDS.request.flightFarm),
+    Requested_Arrival: readTableColumn(FIELD_IDS.request.requestedArrival),
   };
   const rowCount = Math.max(
     0,
@@ -107,7 +138,9 @@ function readFlightRows() {
 }
 
 function readEmployeeRows() {
-  const employeeTable = LFForm.getFieldValues({ fieldId: 44 });
+  const employeeTable = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.employeeTable,
+  });
   return toTabulatorData(employeeTable).rows.map((row) => ({
     Employee_Number: row.Employee_Number ?? row.EmployeeNumber ?? "",
     FullName: row.FullName ?? "",
@@ -115,41 +148,23 @@ function readEmployeeRows() {
   }));
 }
 
-function buildTabulatorPayload() {
-  const employeeRows = readEmployeeRows();
-
-  return {
-    type: "employee-tabulator:init",
-    view: "flights",
-    data: {
-      employees: employeeRows,
-      flights: readFlightRows(),
-    },
-  };
-}
-
-function sendTableToTabulator() {
-  if (
-    !tabulatorWindow ||
-    !employeeTableReady ||
-    !flightLookupReady ||
-    initialDataSent
-  ) {
-    return;
-  }
-
-  const payload = buildTabulatorPayload();
-  tabulatorWindow.postMessage(payload, TABULATOR_ORIGIN);
-  initialDataSent = true;
-  console.info("[LF bridge] flight init sent", {
-    employees: payload.data.employees.length,
-    flights: payload.data.flights.length,
+function readUserRole() {
+  if (!FIELD_IDS.request.role) return "";
+  const roleValue = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.request.role,
   });
+  const value = Array.isArray(roleValue) ? roleValue[0] : roleValue;
+  if (value && typeof value === "object") {
+    return String(value.data ?? value.value ?? value.label ?? "").trim();
+  }
+  return String(value ?? "").trim();
 }
 
 function buildEmployeeRequestPayload() {
-  const farmValues = LFForm.getFieldValues({ fieldId: 70 });
-  const farms = [
+  const farmValues = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.request.farmTable,
+  });
+  const worksites = [
     ...new Set(
       (Array.isArray(farmValues) ? farmValues : [farmValues])
         .map((farm) => {
@@ -169,149 +184,37 @@ function buildEmployeeRequestPayload() {
   ];
 
   const employees = readEmployeeRows();
-  const requestByEmployee = new Map();
-  const arrivalFound = new Set();
-
-  for (const flight of readFlightRows()) {
-    const employeeNumber = String(flight.Employee_Number ?? "");
-    if (!employeeNumber) continue;
-
-    const request = requestByEmployee.get(employeeNumber) ?? {
-      Employee_Number: employeeNumber,
-      Request_Status: "",
-      Farm: "",
-      Preferred_Arrival_By: "",
-      Flight_Number: "",
-      Flight_Arrival: "",
-      Departure_Airport: "",
-      Arrival_Airport: "",
-    };
-
-    request.Request_Status ||= flight.Request_Status ?? "";
-    request.Farm ||= flight.Farm ?? "";
-    request.Preferred_Arrival_By ||= flight.Requested_Arrival ?? "";
-
-    if (
-      !arrivalFound.has(employeeNumber) &&
-      String(flight.Flight_Type ?? "").toLowerCase() === "arrival"
-    ) {
-      request.Flight_Number = flight.Flight_Number ?? "";
-      request.Flight_Arrival = flight.Flight_Date ?? "";
-      request.Departure_Airport = flight.Flight_Origin ?? "";
-      request.Arrival_Airport = flight.Flight_Destination ?? "";
-      arrivalFound.add(employeeNumber);
-    }
-
-    requestByEmployee.set(employeeNumber, request);
-  }
-
   return {
     type: "employee-tabulator:init",
-    view: "employee-request",
     data: {
+      Role: readUserRole(),
       employees,
-      farms,
-      requests: employees.map(
-        (employee) =>
-          requestByEmployee.get(String(employee.Employee_Number ?? "")) ?? {
-            Employee_Number: String(employee.Employee_Number ?? ""),
-          },
-      ),
+      worksites,
+      flights: readFlightRows(),
     },
   };
 }
 
-function sendEmployeeRequestsToTabulator() {
+function sendDataToTabulator() {
   if (
-    !requestTabulatorWindow ||
+    !tabulatorWindow ||
     !employeeTableReady ||
     !flightLookupReady ||
     !farmTableReady ||
-    requestDataSent
+    initialDataSent
   ) {
     return;
   }
 
   const payload = buildEmployeeRequestPayload();
-  requestTabulatorWindow.postMessage(payload, TABULATOR_ORIGIN);
-  requestDataSent = true;
-  console.info("[LF bridge] employee-request init sent", {
+  if (!payload.data.Role && !roleReady) return;
+  tabulatorWindow.postMessage(payload, TABULATOR_ORIGIN);
+  initialDataSent = true;
+  console.info("[LF bridge] unified init sent", {
     employees: payload.data.employees.length,
-    farms: payload.data.farms.length,
+    worksites: payload.data.worksites.length,
+    flights: payload.data.flights.length,
   });
-}
-
-async function appendFlightsToOutputTable(flights) {
-  const validFlights = flights.filter((flight) => {
-    const rawDate = flight.Flight_Date;
-    const dateIsBlank =
-      !rawDate ||
-      (typeof rawDate === "object" && !rawDate.dateStr && !rawDate.timeStr);
-    const deletionMarker =
-      [
-        flight.Flight_Number,
-        flight.Flight_Carrier,
-        flight.Flight_Origin,
-        flight.Flight_Destination,
-        flight.Flight_Type,
-      ].every((value) => value == null || value === "") && dateIsBlank;
-
-    return (
-      flight.Employee_Number &&
-      (deletionMarker || ["Arrival", "Departure"].includes(flight.Flight_Type))
-    );
-  });
-  if (validFlights.length === 0) return 0;
-
-  const existingEmployeeNumbers = LFForm.getFieldValues({ fieldId: 60 });
-  const firstIndex = Array.isArray(existingEmployeeNumbers)
-    ? existingEmployeeNumbers.length
-    : existingEmployeeNumbers == null || existingEmployeeNumbers === ""
-      ? 0
-      : 1;
-
-  await LFForm.addRow({ fieldId: 59 }, validFlights.length);
-
-  for (let offset = 0; offset < validFlights.length; offset++) {
-    const flight = validFlights[offset];
-    const index = firstIndex + offset;
-    const rawDate = flight.Flight_Date;
-    const dateValue =
-      rawDate && typeof rawDate === "object"
-        ? {
-            dateStr: rawDate.dateStr ?? "",
-            ...(rawDate.timeStr ? { timeStr: rawDate.timeStr } : {}),
-          }
-        : { dateStr: String(rawDate ?? "") };
-
-    await LFForm.setFieldValues(
-      { fieldId: 60, index },
-      String(flight.Employee_Number),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: 61, index },
-      String(flight.Flight_Number ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: 62, index },
-      String(flight.Flight_Carrier ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: 63, index },
-      String(flight.Flight_Origin ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: 64, index },
-      String(flight.Flight_Destination ?? ""),
-    );
-    await LFForm.setFieldValues({ fieldId: 65, index }, dateValue);
-    await LFForm.setFieldValues(
-      { fieldId: 66, index },
-      String(flight.Flight_Type),
-    );
-  }
-
-  return validFlights.length;
 }
 
 function requestTextOrDefault(value, fallback) {
@@ -334,45 +237,62 @@ function requestDateTime(value) {
 async function appendEmployeeRequestsToOutputTable(requests) {
   if (requests.length === 0) return 0;
 
-  const existingEmployeeNumbers = LFForm.getFieldValues({ fieldId: 72 });
+  const existingEmployeeNumbers = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.request.output.employeeNumber,
+  });
   const firstIndex = Array.isArray(existingEmployeeNumbers)
     ? existingEmployeeNumbers.length
     : existingEmployeeNumbers == null || existingEmployeeNumbers === ""
       ? 0
       : 1;
 
-  await LFForm.addRow({ fieldId: 71 }, requests.length);
+  await LFForm.addRow(
+    { fieldId: FIELD_IDS.request.outputTable },
+    requests.length,
+  );
 
   for (let offset = 0; offset < requests.length; offset++) {
     const request = requests[offset] ?? {};
     const index = firstIndex + offset;
     await LFForm.setFieldValues(
-      { fieldId: 72, index },
+      { fieldId: FIELD_IDS.request.output.employeeNumber, index },
       String(request.Employee_Number ?? ""),
     );
     await LFForm.setFieldValues(
-      { fieldId: 73, index },
-      String(request.FullName ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: 74, index },
+      { fieldId: FIELD_IDS.request.output.status, index },
       requestTextOrDefault(request.Request_Status, "Cancel"),
     );
     await LFForm.setFieldValues(
-      { fieldId: 75, index },
+      { fieldId: FIELD_IDS.request.output.farm, index },
       requestTextOrDefault(request.Farm, "TBD"),
     );
     await LFForm.setFieldValues(
-      { fieldId: 76, index },
+      { fieldId: FIELD_IDS.request.output.preferredArrival, index },
       requestDateTime(request.Preferred_Arrival_By),
     );
     await LFForm.setFieldValues(
-      { fieldId: 77, index },
+      { fieldId: FIELD_IDS.request.output.flightNumber, index },
       requestTextOrDefault(request.Flight_Number, "TBD"),
     );
     await LFForm.setFieldValues(
-      { fieldId: 78, index },
-      requestDateTime(request.Flight_Arrival),
+      { fieldId: FIELD_IDS.request.output.carrier, index },
+      String(request.Flight_Carrier ?? ""),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.origin, index },
+      String(request.Flight_Origin ?? ""),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.destination, index },
+      String(request.Flight_Destination ?? ""),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.flightDateTime, index },
+      requestDateTime(request.Flight_DateTime),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.flightType, index },
+      String(request.Flight_Type ?? ""),
     );
   }
 
@@ -387,33 +307,17 @@ window.addEventListener("message", (event) => {
       origin: event.origin,
       expectedOrigin: TABULATOR_ORIGIN,
       hasSource: Boolean(event.source),
-      view: event.data?.view,
     });
     return;
   }
 
-  const view =
-    event.data.view === "employee-request" ? "employee-request" : "flights";
-  if (!connectedViews.has(view)) {
-    connectedViews.add(view);
-    console.info("[LF bridge] connected", { view });
-  }
+  tabulatorWindow = event.source;
+  console.info("[LF bridge] connected");
+  sendDataToTabulator();
 
-  if (view === "employee-request") {
-    requestTabulatorWindow = event.source;
-    sendEmployeeRequestsToTabulator();
-  } else {
-    tabulatorWindow = event.source;
-    sendTableToTabulator();
-  }
-
-  if (tabulatorWindow && requestTabulatorWindow && helloTimer !== null) {
+  if (helloTimer !== null) {
     clearInterval(helloTimer);
     helloTimer = null;
-    if (!allConnectionsLogged) {
-      allConnectionsLogged = true;
-      console.info("[LF bridge] all hosted views connected");
-    }
   }
 });
 
@@ -421,34 +325,6 @@ window.addEventListener("message", async (event) => {
   if (
     event.origin !== TABULATOR_ORIGIN ||
     event.source !== tabulatorWindow ||
-    event.data?.type !== "employee-tabulator:save" ||
-    !Array.isArray(event.data.flights)
-  ) {
-    return;
-  }
-
-  try {
-    const rowsSaved = await appendFlightsToOutputTable(event.data.flights);
-    event.source.postMessage(
-      { type: "employee-tabulator:saved", rowsSaved },
-      TABULATOR_ORIGIN,
-    );
-  } catch (error) {
-    console.error("Could not append flights to output table", error);
-    event.source.postMessage(
-      {
-        type: "employee-tabulator:save-error",
-        message: error instanceof Error ? error.message : String(error),
-      },
-      TABULATOR_ORIGIN,
-    );
-  }
-});
-
-window.addEventListener("message", async (event) => {
-  if (
-    event.origin !== TABULATOR_ORIGIN ||
-    event.source !== requestTabulatorWindow ||
     event.data?.type !== "employee-request:save" ||
     !Array.isArray(event.data.requests)
   ) {
@@ -508,10 +384,9 @@ LFForm.onFieldChange(
       console.info("[LF bridge] employee table ready");
     }
     employeeTableReady = true;
-    sendTableToTabulator();
-    sendEmployeeRequestsToTabulator();
+    sendDataToTabulator();
   },
-  { fieldId: 47 },
+  { fieldId: FIELD_IDS.employeeTableReady },
 );
 
 LFForm.onFieldChange(
@@ -520,10 +395,9 @@ LFForm.onFieldChange(
       console.info("[LF bridge] flight lookup ready");
     }
     flightLookupReady = true;
-    sendTableToTabulator();
-    sendEmployeeRequestsToTabulator();
+    sendDataToTabulator();
   },
-  { fieldId: 57 },
+  { fieldId: FIELD_IDS.flight.type },
 );
 
 LFForm.onFieldChange(
@@ -532,7 +406,15 @@ LFForm.onFieldChange(
       console.info("[LF bridge] farm table ready");
     }
     farmTableReady = true;
-    sendEmployeeRequestsToTabulator();
+    sendDataToTabulator();
   },
-  { fieldId: 70 },
+  { fieldId: FIELD_IDS.request.farmTable },
+);
+
+LFForm.onFieldChange(
+  () => {
+    roleReady = true;
+    sendDataToTabulator();
+  },
+  { fieldId: FIELD_IDS.request.role },
 );
