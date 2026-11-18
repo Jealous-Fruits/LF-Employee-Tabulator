@@ -864,16 +864,10 @@ function App() {
 
   return (
     <main className="workspace">
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">LF</div>
-        <div className="brand-copy"><span>PEOPLE OPERATIONS</span><strong>Employee travel</strong></div>
-        <div className="connection"><span className={ready ? 'connection-dot is-live' : 'connection-dot'} />{ready ? 'Form connected' : 'Awaiting form data'}</div>
-      </header>
-
       <section className="page-heading">
         <div>
-          <p className="eyebrow">PEOPLE OPERATIONS <span>/</span> EMPLOYEE TRAVEL</p>
-          <h1>Employee travel requests</h1>
+          <p className="eyebrow">PEOPLE OPERATIONS <span>/</span> EMPLOYEE REQUESTS</p>
+          <h1>Employee Hiring and Flight Requests</h1>
           <p className="subheading">Track employee hiring and return requests, worksites, and flight details.</p>
         </div>
         <div className="record-total"><strong>{rowCount.toLocaleString()}</strong><span>records</span></div>
@@ -881,7 +875,7 @@ function App() {
 
       <section className="table-section" aria-label="Employee records">
         <div className="table-toolbar">
-          <div className="table-title"><span className="section-index">01</span><h2>Employee travel requests</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
+          <div className="table-title"><span className="section-index">01</span><h2>Employee hiring and flight requests</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
         </div>
         {!ready ? (
           <div className="empty-state">
