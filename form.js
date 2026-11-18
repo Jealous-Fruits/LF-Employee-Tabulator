@@ -9,6 +9,9 @@ const FIELD_IDS = Object.freeze({
     destination: 104,
     date: 105,
     type: 106,
+    request_status: 107,
+    requested_arrival: 108,
+    farm: 109,
   },
   request: {
     role: 110,
@@ -26,9 +29,9 @@ const FIELD_IDS = Object.freeze({
       flightDateTime: 116,
       flightType: 117,
     },
-    flightStatus: 80,
-    flightFarm: 82,
-    requestedArrival: 83,
+    flightStatus: 107,
+    flightFarm: 109,
+    requestedArrival: 108,
   },
 });
 

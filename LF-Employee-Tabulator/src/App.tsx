@@ -248,6 +248,7 @@ const REQUEST_STATUS_TRANSITIONS: Record<string, string[]> = {
 const BOOKED_REQUEST_STATUSES = new Set(['Flight Booked', 'Return Flight Booked'])
 const FLIGHT_EDITABLE_REQUEST_STATUSES = new Set(['Requested', 'Request Return'])
 const EMPTY_REQUEST_STATUS_FILTER = '__empty_request_status__'
+const EMPTY_FARM_FILTER = '__empty_farm__'
 
 function allowedRequestStatusTransitions(role: UserRole | null, status: string): string[] {
   if (role === 'HR') {
@@ -436,6 +437,14 @@ function requestColumns(
       widthGrow: 1.1,
       editor: 'list',
       editorParams: { values: ['', ...worksites] },
+      headerFilter: headerSelectFilter([
+        { label: 'Blank', value: EMPTY_FARM_FILTER },
+        ...worksites.map((worksite) => ({ label: worksite, value: worksite })),
+      ]),
+      headerFilterFunc: (filterValue, rowValue) =>
+        filterValue === EMPTY_FARM_FILTER
+          ? !String(rowValue ?? '').trim()
+          : String(rowValue ?? '').trim() === filterValue,
     },
     {
       title: 'Req. Arrival/Departure',
