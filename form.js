@@ -94,7 +94,7 @@ function toTabulatorData(input) {
   return { columns, rows };
 }
 
-const TABULATOR_ORIGIN = "https://daletools.github.io";
+const TABULATOR_ORIGIN = "https://jealous-fruits.github.io";
 let tabulatorWindow = null;
 let helloTimer = null;
 let employeeTableReady = false;
@@ -370,6 +370,8 @@ window.addEventListener("message", async (event) => {
   }
 });
 
+const helloStartedAt = Date.now();
+
 function sendHelloToTabulatorFrames() {
   if (!helloScanLogged) {
     helloScanLogged = true;
@@ -385,7 +387,7 @@ function sendHelloToTabulatorFrames() {
     try {
       window.parent.frames[index].postMessage(
         { type: "employee-tabulator:hello" },
-        "*",
+        TABULATOR_ORIGIN,
       );
     } catch (error) {
       console.debug("Could not send tabulator hello to frame", index, error);
@@ -394,7 +396,17 @@ function sendHelloToTabulatorFrames() {
 }
 
 sendHelloToTabulatorFrames();
-helloTimer = setInterval(sendHelloToTabulatorFrames, 250);
+helloTimer = setInterval(() => {
+  if (Date.now() - helloStartedAt >= 60000) {
+    clearInterval(helloTimer);
+    helloTimer = null;
+    console.warn(
+      `[LF bridge] no response from ${TABULATOR_ORIGIN} after 60 seconds; check the embedded iframe URL`,
+    );
+    return;
+  }
+  sendHelloToTabulatorFrames();
+}, 1000);
 
 LFForm.onFieldChange(
   () => {
