@@ -49,6 +49,7 @@ const FLIGHT_FIELDS = [
 ] as const
 const FLIGHT_DEFINITION_FIELDS = FLIGHT_FIELDS.filter((field) => field !== 'Flight_Number')
 const MAX_WORKERS_PER_ADD = 1000
+const LF_SANDBOX_ORIGIN = 'https://sandbox-forms.laserfiche.ca'
 
 function flightSnapshot(row: EmployeeRow): string {
   return JSON.stringify(FLIGHT_FIELDS.map((field) => row[field] ?? ''))
@@ -511,7 +512,6 @@ function App() {
   const savingTemporaryWorkers = useRef(false)
   const previewMode = useRef(false)
   const role = useRef<UserRole | null>(null)
-  const targetOrigin = useRef('*')
   const flightDefinitions = useRef(new Map<string, Record<string, unknown>>())
   const flightOptions = useRef<Record<string, string>>({})
   const originalRows = useRef(new Map<string, string>())
@@ -591,8 +591,10 @@ function App() {
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data
+      if (event.origin !== LF_SANDBOX_ORIGIN) return
 
       if (data?.type === 'employee-request:saved') {
+        if (event.source !== formWindow.current) return
         setSaving(false)
         const rowsSaved = Number(data.rowsSaved) || 0
         if (savingTemporaryWorkers.current) {
@@ -606,6 +608,7 @@ function App() {
       }
 
       if (data?.type === 'employee-request:save-error') {
+        if (event.source !== formWindow.current) return
         setSaving(false)
         savingTemporaryWorkers.current = false
         setSaveNotice(`The form could not save employee travel rows: ${String(data.message ?? 'Unknown error')}`)
@@ -613,17 +616,18 @@ function App() {
       }
 
       if (data?.type === 'employee-tabulator:hello') {
-        if (event.source && event.origin !== 'null') {
+        if (event.source) {
           formWindow.current = event.source as Window
           console.log('Replying ready to hello sender', event.origin)
           ;(event.source as Window).postMessage(
             { type: 'employee-tabulator:ready' },
-            event.origin,
+            LF_SANDBOX_ORIGIN,
           )
         }
         return
       }
 
+      if (!formWindow.current || event.source !== formWindow.current) return
       if (!data || typeof data !== 'object' || data.type !== 'employee-tabulator:init') return
 
       const payload = data as {
@@ -676,8 +680,6 @@ function App() {
         flightOptions.current[flightNumber] = flightNumber
       }
 
-      targetOrigin.current = event.origin === 'null' ? '*' : event.origin
-      if (event.source) formWindow.current = event.source as Window
       originalRows.current = new Map(
         normalizedRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
       )
@@ -799,8 +801,12 @@ function App() {
         setSaveNotice(`${payload.requests.length} additional worker request(s) saved in preview.`)
         return
       }
+      if (!formWindow.current) {
+        setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
+        return
+      }
       savingTemporaryWorkers.current = true
-      ;(formWindow.current ?? window.parent).postMessage(payload, targetOrigin.current)
+      formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
       setSaveNotice('Additional worker requests sent to the form.')
       setSaving(true)
       return
@@ -827,6 +833,10 @@ function App() {
       setSaveNotice('Employee travel updates saved in preview.')
       return
     }
+    if (!formWindow.current) {
+      setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
+      return
+    }
 
     const invalidRows = changedRows.filter((row) => {
       const flightChanged = originalFlightRows.current.get(row.__lfRowId) !== flightSnapshot(row)
@@ -848,7 +858,7 @@ function App() {
       type: 'employee-request:save',
       requests: (changedRows as RequestRow[]).map(toRequestPayload),
     }
-    ;(formWindow.current ?? window.parent).postMessage(payload, targetOrigin.current)
+    formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
     updatedRows.current.clear()
     setChangeCount(0)
     setSaveNotice('Employee travel updates sent to the form.')
@@ -903,7 +913,6 @@ function App() {
       Status: ['Active', 'Terminated', 'Active', 'Active'][index % 4],
     }))
     previewMode.current = true
-    targetOrigin.current = window.location.origin
     role.current = 'HR'
     const worksites = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
     setWorksites(worksites)

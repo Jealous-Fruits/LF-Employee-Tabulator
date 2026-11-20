@@ -15,11 +15,11 @@ Use **Preview with 3,000 sample requests** to exercise the grid without a form.
 
 The repository includes a GitHub Actions deployment workflow. In GitHub, open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**. Push the `main` branch or run **Deploy to GitHub Pages** from the Actions tab to publish the site.
 
-The live site URL is <https://daletools.github.io/LF-Employee-Tabulator/>. The workflow installs from this app's lockfile, builds the Vite site with the `/LF-Employee-Tabulator/` base path, and deploys the build artifact. Local development continues to use `/`.
+The live site URL is <https://jealous-fruits.github.io/LF-Employee-Tabulator/>. The workflow installs from this app's lockfile, builds the Vite site with the `/LF-Employee-Tabulator/` base path, and deploys the build artifact. Local development continues to use `/`.
 
 ## Laserfiche iframe setup
 
-Embed one hosted page at <https://daletools.github.io/LF-Employee-Tabulator/>. The URL does not use a `view` parameter; the supplied Role determines which fields are editable.
+Embed one hosted page at <https://jealous-fruits.github.io/LF-Employee-Tabulator/>. The URL does not use a `view` parameter; the supplied Role determines which fields are editable.
 
 The form script reads employees from table field `93`, worksite choices from field `112`, Role from field `110`, and flight data from fields `100` through `109`. Fields `107`, `109`, and `108` provide request status, farm, and preferred arrival/departure date for the flight rows. The employee table-ready signal is field `97`.
 
@@ -31,7 +31,9 @@ The **Additional workers** tab allows any user to request a quantity of workers 
 
 Only `HR` and `Manager` are recognized roles. An absent or unknown role leaves the grid read-only and displays an error. HR may edit flight fields while Request Status is `Requested` or `Request Return`, and may move those statuses to `Flight Booked` or `Return Flight Booked`, respectively. Managers may set a blank status to `Requested` and `Arrived` to `Request Return`; Farm and requested date are editable only for eligible nonblank statuses other than `Arrived` and the booked statuses. Booked statuses keep Request Status and flight fields read-only. Preferred arrival/departure dates are constrained to tomorrow or later.
 
-The form script probes the hosted iframe with `employee-tabulator:hello`; it replies with `employee-tabulator:ready` and receives one `employee-tabulator:init` payload:
+The hosted iframe is already embedded in the form. The LFForm sandbox sends `employee-tabulator:hello` to child frames using the exact hosted origin as `targetOrigin`, retrying for up to 60 seconds. The hosted page accepts messages only from `https://sandbox-forms.laserfiche.ca`, replies to the hello sender with `employee-tabulator:ready`, then accepts init and save acknowledgements only from that same sandbox window. Messages back to Laserfiche target the sandbox origin; the page does not use `window.parent` as the data channel.
+
+The page receives one `employee-tabulator:init` payload:
 
 ```js
 {
