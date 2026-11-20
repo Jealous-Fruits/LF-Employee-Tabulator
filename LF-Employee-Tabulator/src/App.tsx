@@ -27,6 +27,17 @@ type RequestRow = EmployeeRow & {
   Flight_Type: string
 }
 
+type TemporaryWorkerRow = {
+  __lfRowId: string
+  Employee_Number: string
+  Farm: string
+  FullName: string
+  PhoneNumber: string
+  Email: string
+}
+
+type PageTab = 'employee-requests' | 'additional-workers'
+
 const FLIGHT_FIELDS = [
   'Flight_Number',
   'Flight_Carrier',
@@ -37,6 +48,7 @@ const FLIGHT_FIELDS = [
   'Flight_Type',
 ] as const
 const FLIGHT_DEFINITION_FIELDS = FLIGHT_FIELDS.filter((field) => field !== 'Flight_Number')
+const MAX_WORKERS_PER_ADD = 1000
 
 function flightSnapshot(row: EmployeeRow): string {
   return JSON.stringify(FLIGHT_FIELDS.map((field) => row[field] ?? ''))
@@ -118,6 +130,7 @@ function buildRequestRows(
 function toRequestPayload(row: RequestRow): Record<string, unknown> {
   return {
     Employee_Number: row.Employee_Number,
+    FullName: row.FullName,
     Request_Status: row.Request_Status,
     Farm: row.Farm,
     Preferred_Arrival_By: dateTimeForLaser(row.Preferred_Arrival_By, ''),
@@ -127,6 +140,8 @@ function toRequestPayload(row: RequestRow): Record<string, unknown> {
     Flight_Destination: row.Flight_Destination,
     Flight_DateTime: dateTimeForLaser(row.Flight_Date, row.Flight_Time),
     Flight_Type: row.Flight_Type,
+    PhoneNumber: row.PhoneNumber ?? '',
+    Email: row.Email ?? '',
   }
 }
 
@@ -492,6 +507,8 @@ function App() {
   const tableElement = useRef<HTMLDivElement>(null)
   const table = useRef<Tabulator | null>(null)
   const formWindow = useRef<Window | null>(null)
+  const nextTemporaryEmployeeNumber = useRef(-1)
+  const savingTemporaryWorkers = useRef(false)
   const previewMode = useRef(false)
   const role = useRef<UserRole | null>(null)
   const targetOrigin = useRef('*')
@@ -502,6 +519,12 @@ function App() {
   const updatedRows = useRef(new Map<string, EmployeeRow>())
   const [columns, setColumns] = useState<ColumnDefinition[]>([])
   const [rows, setRows] = useState<EmployeeRow[]>([])
+  const [worksites, setWorksites] = useState<string[]>([])
+  const [activeTab, setActiveTab] = useState<PageTab>('employee-requests')
+  const [temporaryWorkers, setTemporaryWorkers] = useState<TemporaryWorkerRow[]>([])
+  const [workerFarm, setWorkerFarm] = useState('')
+  const [workerCount, setWorkerCount] = useState('1')
+  const [workerError, setWorkerError] = useState('')
   const [ready, setReady] = useState(false)
   const [message, setMessage] = useState('Waiting for employee data from Laserfiche')
   const [changeCount, setChangeCount] = useState(0)
@@ -571,12 +594,20 @@ function App() {
 
       if (data?.type === 'employee-request:saved') {
         setSaving(false)
-        setSaveNotice(`${Number(data.rowsSaved) || 0} employee travel row(s) saved to the form.`)
+        const rowsSaved = Number(data.rowsSaved) || 0
+        if (savingTemporaryWorkers.current) {
+          setTemporaryWorkers([])
+          savingTemporaryWorkers.current = false
+          setSaveNotice(`${rowsSaved} additional worker request(s) saved to the form.`)
+        } else {
+          setSaveNotice(`${rowsSaved} employee travel row(s) saved to the form.`)
+        }
         return
       }
 
       if (data?.type === 'employee-request:save-error') {
         setSaving(false)
+        savingTemporaryWorkers.current = false
         setSaveNotice(`The form could not save employee travel rows: ${String(data.message ?? 'Unknown error')}`)
         return
       }
@@ -630,6 +661,7 @@ function App() {
         const entry = worksite as Record<string, unknown>
         return String(entry.Worksite ?? entry.Farm ?? entry.Name ?? entry.data ?? '')
       }).filter(Boolean))]
+      setWorksites(worksites)
       const normalizedRows = buildRequestRows(employeeRows, flightRows)
       const definitions = new Map<string, Record<string, unknown>>()
       for (const flight of flightRows) {
@@ -666,7 +698,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!ready || !tableElement.current) return
+    if (!ready || activeTab !== 'employee-requests' || !tableElement.current) return
 
     const editableColumns = columns.map((column) => ({
       ...column,
@@ -739,9 +771,41 @@ function App() {
       grid.destroy()
       table.current = null
     }
-  }, [columns, ready, rows])
+  }, [activeTab, columns, ready, rows])
 
   function saveChanges() {
+    if (activeTab === 'additional-workers') {
+      if (temporaryWorkers.length === 0 || saving) return
+      const payload: RequestChangeSet = {
+        type: 'employee-request:save',
+        requests: temporaryWorkers.map((worker) => ({
+          Employee_Number: worker.Employee_Number,
+          FullName: worker.FullName,
+          Request_Status: 'Requested',
+          Farm: worker.Farm,
+          Preferred_Arrival_By: '',
+          Flight_Number: '',
+          Flight_Carrier: '',
+          Flight_Origin: '',
+          Flight_Destination: '',
+          Flight_DateTime: '',
+          Flight_Type: '',
+          PhoneNumber: worker.PhoneNumber,
+          Email: worker.Email,
+        })),
+      }
+      if (previewMode.current) {
+        setTemporaryWorkers([])
+        setSaveNotice(`${payload.requests.length} additional worker request(s) saved in preview.`)
+        return
+      }
+      savingTemporaryWorkers.current = true
+      ;(formWindow.current ?? window.parent).postMessage(payload, targetOrigin.current)
+      setSaveNotice('Additional worker requests sent to the form.')
+      setSaving(true)
+      return
+    }
+
     const changedRows = [...updatedRows.current.values()].filter((row) => {
       const original = originalRows.current.get(row.__lfRowId)
       return original === undefined || original !== requestSnapshot(row)
@@ -791,6 +855,47 @@ function App() {
     setSaving(true)
   }
 
+  function addTemporaryWorkers() {
+    const count = Number(workerCount)
+    if (!workerFarm) {
+      setWorkerError('Select a farm before adding workers.')
+      return
+    }
+    if (!Number.isSafeInteger(count) || count < 1 || count > MAX_WORKERS_PER_ADD) {
+      setWorkerError(`Enter a whole number between 1 and ${MAX_WORKERS_PER_ADD}.`)
+      return
+    }
+
+    const newWorkers = Array.from({ length: count }, () => {
+      const employeeNumber = String(nextTemporaryEmployeeNumber.current)
+      nextTemporaryEmployeeNumber.current -= 1
+      return {
+        __lfRowId: `temporary-worker-${employeeNumber}`,
+        Employee_Number: employeeNumber,
+        Farm: workerFarm,
+        FullName: '',
+        PhoneNumber: '',
+        Email: '',
+      }
+    })
+    setTemporaryWorkers((current) => [...current, ...newWorkers])
+    setWorkerError('')
+    setSaveNotice('')
+  }
+
+  function updateTemporaryWorker(
+    rowId: string,
+    field: 'FullName' | 'PhoneNumber' | 'Email',
+    value: string,
+  ) {
+    setTemporaryWorkers((current) =>
+      current.map((worker) =>
+        worker.__lfRowId === rowId ? { ...worker, [field]: value } : worker,
+      ),
+    )
+    setSaveNotice('')
+  }
+
   function loadSample() {
     const employees = Array.from({ length: 3000 }, (_, index) => ({
       Employee_Number: `LF-${String(index + 1).padStart(4, '0')}`,
@@ -801,6 +906,7 @@ function App() {
     targetOrigin.current = window.location.origin
     role.current = 'HR'
     const worksites = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
+    setWorksites(worksites)
     const flights = employees.map((employee, index) => {
       const status = [
         '',
@@ -870,10 +976,40 @@ function App() {
           <h1>Employee Hiring and Flight Requests</h1>
           <p className="subheading">Track employee hiring and return requests, worksites, and flight details.</p>
         </div>
-        <div className="record-total"><strong>{rowCount.toLocaleString()}</strong><span>records</span></div>
+        <div className="record-total"><strong>{activeTab === 'employee-requests' ? rowCount.toLocaleString() : temporaryWorkers.length.toLocaleString()}</strong><span>{activeTab === 'employee-requests' ? 'records' : 'requested workers'}</span></div>
       </section>
 
-      <section className="table-section" aria-label="Employee records">
+      <nav className="page-tabs" role="tablist" aria-label="Request type">
+        <button
+          id="employee-requests-tab"
+          className={`page-tab${activeTab === 'employee-requests' ? ' is-active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'employee-requests'}
+          aria-controls="employee-requests-panel"
+          onClick={() => setActiveTab('employee-requests')}
+        >
+          Employee requests
+        </button>
+        <button
+          id="additional-workers-tab"
+          className={`page-tab${activeTab === 'additional-workers' ? ' is-active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'additional-workers'}
+          aria-controls="additional-workers-panel"
+          onClick={() => setActiveTab('additional-workers')}
+        >
+          Additional workers
+        </button>
+      </nav>
+
+      <section
+        className="table-section"
+        aria-label={activeTab === 'employee-requests' ? 'Employee records' : 'Additional worker requests'}
+      >
+        {activeTab === 'employee-requests' ? (
+          <div id="employee-requests-panel" role="tabpanel" aria-labelledby="employee-requests-tab">
         <div className="table-toolbar">
           <div className="table-title"><span className="section-index">01</span><h2>Employee hiring and flight requests</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
         </div>
@@ -893,12 +1029,78 @@ function App() {
           <span><span className="footer-dot" /> {ready ? 'Changes are held until saved' : 'No data loaded'}</span>
           <span>{changeCount ? `${changeCount} unsaved change${changeCount === 1 ? '' : 's'}` : 'No unsaved changes'}</span>
         </footer>
+          </div>
+        ) : (
+          <div id="additional-workers-panel" role="tabpanel" aria-labelledby="additional-workers-tab">
+            <div className="table-toolbar">
+              <div className="table-title"><span className="section-index">02</span><h2>Request additional workers</h2><span className="count-chip">{temporaryWorkers.length}</span></div>
+            </div>
+            <div className="worker-request-panel">
+              <p className="worker-request-intro">Request a number of workers for a farm. Names and contact details are optional and can be entered per worker.</p>
+              <div className="worker-request-controls">
+                <label>
+                  Farm
+                  <select value={workerFarm} onChange={(event) => setWorkerFarm(event.target.value)} disabled={!ready || saving} required>
+                    <option value="">Select a farm</option>
+                    {worksites.map((worksite) => <option key={worksite} value={worksite}>{worksite}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Number of workers
+                  <input
+                    type="number"
+                    min="1"
+                    max={MAX_WORKERS_PER_ADD}
+                    step="1"
+                    value={workerCount}
+                    onChange={(event) => setWorkerCount(event.target.value)}
+                    disabled={!ready || saving}
+                  />
+                </label>
+                <button className="button button-outline" type="button" onClick={addTemporaryWorkers} disabled={!ready || saving}>
+                  Add workers
+                </button>
+              </div>
+              {workerError && <p className="form-error" role="alert">{workerError}</p>}
+              {!ready ? (
+                <p className="worker-empty">Waiting for the farm list from Laserfiche.</p>
+              ) : temporaryWorkers.length === 0 ? (
+                <p className="worker-empty">No additional workers added yet.</p>
+              ) : (
+                <div className="worker-list-wrap">
+                  <table className="worker-list">
+                    <thead>
+                      <tr><th>Temporary employee #</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th><span className="sr-only">Actions</span></th></tr>
+                    </thead>
+                    <tbody>
+                      {temporaryWorkers.map((worker) => (
+                        <tr key={worker.__lfRowId}>
+                          <td>{worker.Employee_Number}</td>
+                          <td><input aria-label={`Name for temporary employee ${worker.Employee_Number}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving} /></td>
+                          <td><input aria-label={`Phone number for temporary employee ${worker.Employee_Number}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving} /></td>
+                          <td><input aria-label={`Email for temporary employee ${worker.Employee_Number}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving} /></td>
+                          <td><button className="remove-worker" type="button" onClick={() => setTemporaryWorkers((current) => current.filter((entry) => entry.__lfRowId !== worker.__lfRowId))} disabled={saving} aria-label={`Remove temporary employee ${worker.Employee_Number}`}>Remove</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <footer className="table-footer">
+              <span><span className="footer-dot" /> {ready ? 'Additional requests are held until saved' : 'No data loaded'}</span>
+              <span>{temporaryWorkers.length} worker{temporaryWorkers.length === 1 ? '' : 's'} prepared</span>
+            </footer>
+          </div>
+        )}
       </section>
 
       <div className="save-bar">
-        <span>{saveNotice || (changeCount ? `${changeCount} change${changeCount === 1 ? '' : 's'} ready to send` : 'No changes to send yet')}</span>
-        <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || !changeCount || saving}>
-          {saving ? 'Changes sent' : 'Save changes'} <span aria-hidden="true">↗</span>
+        <span>{saveNotice || (activeTab === 'additional-workers'
+          ? `${temporaryWorkers.length} worker${temporaryWorkers.length === 1 ? '' : 's'} ready to send`
+          : changeCount ? `${changeCount} change${changeCount === 1 ? '' : 's'} ready to send` : 'No changes to send yet')}</span>
+        <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || (activeTab === 'additional-workers' ? !temporaryWorkers.length : !changeCount) || saving}>
+          {saving ? 'Changes sent' : activeTab === 'additional-workers' ? 'Save worker requests' : 'Save changes'} <span aria-hidden="true">↗</span>
         </button>
       </div>
       <div className="page-foot"><span>LASERFICHE CLOUD FORM INTEGRATION</span><span>EMPLOYEE DATA</span></div>

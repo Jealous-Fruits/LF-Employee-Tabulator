@@ -19,6 +19,7 @@ const FIELD_IDS = Object.freeze({
     outputTable: 71,
     output: {
       employeeNumber: 72,
+      fullName: 73,
       status: 74,
       farm: 75,
       preferredArrival: 76,
@@ -28,6 +29,8 @@ const FIELD_IDS = Object.freeze({
       destination: 115,
       flightDateTime: 116,
       flightType: 117,
+      phoneNumber: 118,
+      email: 119,
     },
     flightStatus: 107,
     flightFarm: 109,
@@ -262,6 +265,10 @@ async function appendEmployeeRequestsToOutputTable(requests) {
       String(request.Employee_Number ?? ""),
     );
     await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.fullName, index },
+      String(request.FullName ?? ""),
+    );
+    await LFForm.setFieldValues(
       { fieldId: FIELD_IDS.request.output.status, index },
       requestTextOrDefault(request.Request_Status, "Cancel"),
     );
@@ -296,6 +303,14 @@ async function appendEmployeeRequestsToOutputTable(requests) {
     await LFForm.setFieldValues(
       { fieldId: FIELD_IDS.request.output.flightType, index },
       String(request.Flight_Type ?? ""),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.phoneNumber, index },
+      String(request.PhoneNumber ?? ""),
+    );
+    await LFForm.setFieldValues(
+      { fieldId: FIELD_IDS.request.output.email, index },
+      String(request.Email ?? ""),
     );
   }
 
