@@ -240,6 +240,21 @@ function requestDateTime(value) {
   };
 }
 
+async function setOutputFieldValue(fieldName, fieldId, index, value) {
+  try {
+    await LFForm.setFieldValues({ fieldId, index }, value);
+  } catch (error) {
+    console.error("[LF bridge] failed to set output field", {
+      fieldName,
+      fieldId,
+      index,
+      rowNumber: index + 1,
+      error,
+    });
+    throw error;
+  }
+}
+
 async function appendEmployeeRequestsToOutputTable(requests) {
   if (requests.length === 0) return 0;
 
@@ -257,62 +272,91 @@ async function appendEmployeeRequestsToOutputTable(requests) {
     requests.length,
   );
 
+  const fieldWrites = [];
   for (let offset = 0; offset < requests.length; offset++) {
     const request = requests[offset] ?? {};
     const index = firstIndex + offset;
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.employeeNumber, index },
-      String(request.Employee_Number ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.fullName, index },
-      String(request.FullName ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.status, index },
-      requestTextOrDefault(request.Request_Status, "Cancel"),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.farm, index },
-      requestTextOrDefault(request.Farm, "TBD"),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.preferredArrival, index },
-      requestDateTime(request.Preferred_Arrival_By),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.flightNumber, index },
-      requestTextOrDefault(request.Flight_Number, "TBD"),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.carrier, index },
-      String(request.Flight_Carrier ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.origin, index },
-      String(request.Flight_Origin ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.destination, index },
-      String(request.Flight_Destination ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.flightDateTime, index },
-      requestDateTime(request.Flight_DateTime),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.flightType, index },
-      String(request.Flight_Type ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.phoneNumber, index },
-      String(request.PhoneNumber ?? ""),
-    );
-    await LFForm.setFieldValues(
-      { fieldId: FIELD_IDS.request.output.email, index },
-      String(request.Email ?? ""),
+    fieldWrites.push(
+      setOutputFieldValue(
+        "employeeNumber",
+        FIELD_IDS.request.output.employeeNumber,
+        index,
+        String(request.Employee_Number ?? ""),
+      ),
+      setOutputFieldValue(
+        "status",
+        FIELD_IDS.request.output.status,
+        index,
+        requestTextOrDefault(request.Request_Status, "Cancel"),
+      ),
+      setOutputFieldValue(
+        "farm",
+        FIELD_IDS.request.output.farm,
+        index,
+        requestTextOrDefault(request.Farm, "TBD"),
+      ),
+      setOutputFieldValue(
+        "preferredArrival",
+        FIELD_IDS.request.output.preferredArrival,
+        index,
+        requestDateTime(request.Preferred_Arrival_By),
+      ),
+      setOutputFieldValue(
+        "flightNumber",
+        FIELD_IDS.request.output.flightNumber,
+        index,
+        requestTextOrDefault(request.Flight_Number, "TBD"),
+      ),
+      setOutputFieldValue(
+        "carrier",
+        FIELD_IDS.request.output.carrier,
+        index,
+        String(request.Flight_Carrier ?? ""),
+      ),
+      setOutputFieldValue(
+        "origin",
+        FIELD_IDS.request.output.origin,
+        index,
+        String(request.Flight_Origin ?? ""),
+      ),
+      setOutputFieldValue(
+        "destination",
+        FIELD_IDS.request.output.destination,
+        index,
+        String(request.Flight_Destination ?? ""),
+      ),
+      setOutputFieldValue(
+        "flightDateTime",
+        FIELD_IDS.request.output.flightDateTime,
+        index,
+        requestDateTime(request.Flight_DateTime),
+      ),
+      setOutputFieldValue(
+        "flightType",
+        FIELD_IDS.request.output.flightType,
+        index,
+        String(request.Flight_Type ?? ""),
+      ),
+      setOutputFieldValue(
+        "phoneNumber",
+        FIELD_IDS.request.output.phoneNumber,
+        index,
+        String(request.PhoneNumber ?? ""),
+      ),
+      setOutputFieldValue(
+        "email",
+        FIELD_IDS.request.output.email,
+        index,
+        String(request.Email ?? ""),
+      ),
     );
   }
+
+  const writeResults = await Promise.allSettled(fieldWrites);
+  const failedWrite = writeResults.find(
+    (result) => result.status === "rejected",
+  );
+  if (failedWrite) throw failedWrite.reason;
 
   return requests.length;
 }

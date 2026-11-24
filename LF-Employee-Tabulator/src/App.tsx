@@ -262,13 +262,13 @@ const REQUEST_STATUS_TRANSITIONS: Record<string, string[]> = {
   'Request Return': ['Arrived'],
 }
 const BOOKED_REQUEST_STATUSES = new Set(['Flight Booked', 'Return Flight Booked'])
-const FLIGHT_EDITABLE_REQUEST_STATUSES = new Set(['Requested', 'Request Return'])
 const EMPTY_REQUEST_STATUS_FILTER = '__empty_request_status__'
 const EMPTY_FARM_FILTER = '__empty_farm__'
 
 function allowedRequestStatusTransitions(role: UserRole | null, status: string): string[] {
   if (role === 'HR') {
     if (status === 'Requested') return ['Flight Booked']
+    if (status === 'Flight Booked') return ['Requested']
     if (status === 'Request Return') return ['Return Flight Booked']
     return []
   }
@@ -293,14 +293,13 @@ function isCellEditable(
     return allowedRequestStatusTransitions(role, requestStatus).length > 0
   }
   if (role === 'HR' && field === 'Flight_Number') {
-    return FLIGHT_EDITABLE_REQUEST_STATUSES.has(requestStatus)
+    return isBooked
   }
   if (
     role === 'HR' &&
     (FLIGHT_DEFINITION_FIELDS as readonly string[]).includes(field)
   ) {
-    return FLIGHT_EDITABLE_REQUEST_STATUSES.has(requestStatus) &&
-      Boolean(rowData.Flight_Number)
+    return isBooked
   }
   if (role !== 'Manager') return false
   if (requestStatus === 'Arrived') return false
@@ -576,6 +575,18 @@ function App() {
     })
   }
 
+  function clearFlightAssignment(row: RowComponent) {
+    row.update({
+      Flight_Number: '',
+      Flight_Carrier: '',
+      Flight_Origin: '',
+      Flight_Destination: '',
+      Flight_Date: '',
+      Flight_Time: '',
+      Flight_Type: '',
+    })
+  }
+
   function fillFlightDefinition(row: RowComponent, definition: Record<string, unknown>) {
     row.update({
       Flight_Carrier: definition.Flight_Carrier ?? '',
@@ -749,6 +760,14 @@ function App() {
         if (flightNumber) flightOptions.current[flightNumber] = flightNumber
         for (const target of affectedRows) trackUpdate(target.getData() as EmployeeRow)
         return
+      }
+
+      if (
+        field === 'Request_Status' &&
+        role.current === 'HR' &&
+        String(row.getData().Request_Status ?? '').trim() === 'Requested'
+      ) {
+        clearFlightAssignment(row)
       }
 
       const rowData = row.getData() as EmployeeRow
@@ -928,8 +947,7 @@ function App() {
       const flightType = status === 'Request Return' || status === 'Return Flight Booked'
         ? 'Departure'
         : 'Arrival'
-      const hasFlight = BOOKED_REQUEST_STATUSES.has(status) ||
-        (FLIGHT_EDITABLE_REQUEST_STATUSES.has(status) && index % 2 === 1)
+      const hasFlight = BOOKED_REQUEST_STATUSES.has(status)
       const day = String((index % 27) + 1).padStart(2, '0')
       const flightDay = String(
         (flightType === 'Arrival' ? 20 : 10) + (index % 4),
