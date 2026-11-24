@@ -69,7 +69,6 @@ On **Save changes**, the page sends one `{ type: "employee-request:save", reques
 | Output column | Field ID |
 | --- | ---: |
 | Employee Number | 72 |
-| Name | 73 |
 | Request Status | 74 |
 | Farm | 75 |
 | Preferred Arrival/Departure | 76 |
@@ -81,5 +80,6 @@ On **Save changes**, the page sends one `{ type: "employee-request:save", reques
 | Flight Type | 117 |
 | Phone Number | 118 |
 | Email | 119 |
+| New Hire Name | 120 |
 
-Blank request status, farm, and flight number values are written as `Cancel`, `TBD`, and `TBD`; blank dates use `{ dateStr: "1900-01-01" }`. Name, phone number, and email are written as blank strings when not provided. There is no separate flight output table or second iframe.
+Blank request status, farm, and flight number values are written as `Cancel`, `TBD`, and `TBD`; blank dates use `{ dateStr: "1900-01-01" }`. New Hire Name is populated only for temporary workers with a negative employee number and is blank when not provided; it remains blank for standard employee requests. Phone number and email are blank when not provided. There is no separate flight output table or second iframe.

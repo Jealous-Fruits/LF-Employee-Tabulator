@@ -31,6 +31,7 @@ const FIELD_IDS = Object.freeze({
       flightType: 117,
       phoneNumber: 118,
       email: 119,
+      newHireName: 120,
     },
     flightStatus: 107,
     flightFarm: 109,
@@ -276,6 +277,9 @@ async function appendEmployeeRequestsToOutputTable(requests) {
   for (let offset = 0; offset < requests.length; offset++) {
     const request = requests[offset] ?? {};
     const index = firstIndex + offset;
+    const newHireName = Number(request.Employee_Number) < 0
+      ? String(request.FullName ?? "")
+      : "";
     fieldWrites.push(
       setOutputFieldValue(
         "employeeNumber",
@@ -348,6 +352,12 @@ async function appendEmployeeRequestsToOutputTable(requests) {
         FIELD_IDS.request.output.email,
         index,
         String(request.Email ?? ""),
+      ),
+      setOutputFieldValue(
+        "newHireName",
+        FIELD_IDS.request.output.newHireName,
+        index,
+        newHireName,
       ),
     );
   }
