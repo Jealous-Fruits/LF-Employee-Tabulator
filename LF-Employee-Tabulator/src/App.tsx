@@ -1112,7 +1112,6 @@ function App() {
           {saving ? 'Changes sent' : activeTab === 'additional-workers' ? 'Save worker requests' : 'Save changes'} <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <div className="page-foot"><span>LASERFICHE CLOUD FORM INTEGRATION</span><span>EMPLOYEE DATA</span></div>
     </main>
   )
 }

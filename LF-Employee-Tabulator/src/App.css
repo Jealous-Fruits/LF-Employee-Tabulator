@@ -1,14 +1,19 @@
 .workspace {
   width: min(100%, 1800px);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   margin: 0 auto;
-  padding: 0 clamp(18px, 2vw, 36px) 20px;
+  padding: 0 clamp(18px, 2vw, 36px) 8px;
   box-sizing: border-box;
+  overflow: hidden;
   color: var(--ink);
 }
 
 .topbar {
-  height: 76px;
+  height: 64px;
+  flex: 0 0 64px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -71,7 +76,8 @@
 }
 
 .page-heading {
-  min-height: 144px;
+  min-height: 100px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -79,7 +85,7 @@
 }
 
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 5px;
 }
 
 .eyebrow span {
@@ -91,14 +97,14 @@
   margin: 0;
   color: var(--ink);
   font-family: Georgia, 'Times New Roman', serif;
-  font-size: 38px;
+  font-size: 34px;
   font-weight: 400;
-  line-height: 1.12;
+  line-height: 1.05;
   letter-spacing: 0;
 }
 
 .subheading {
-  margin: 9px 0 0;
+  margin: 5px 0 0;
   color: var(--muted);
   font-size: 13px;
 }
@@ -123,6 +129,8 @@
 }
 
 .table-section {
+  flex: 1 1 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   background: #fff;
@@ -130,9 +138,18 @@
 
 .page-tabs {
   display: flex;
+  flex: 0 0 auto;
   gap: 4px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   border-bottom: 1px solid var(--line);
+}
+
+#employee-requests-panel,
+#additional-workers-panel {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .page-tab {
@@ -167,7 +184,8 @@
 }
 
 .table-toolbar {
-  min-height: 65px;
+  min-height: 56px;
+  flex: 0 0 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -267,7 +285,9 @@
 }
 
 .table-host {
-  height: clamp(360px, 58vh, 660px);
+  height: auto;
+  min-height: 0;
+  flex: 1 1 0;
   overflow: auto;
 }
 
@@ -276,7 +296,9 @@
 }
 
 .empty-state {
-  height: clamp(360px, 58vh, 660px);
+  height: auto;
+  min-height: 0;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -323,6 +345,7 @@
 
 .table-footer {
   min-height: 37px;
+  flex: 0 0 37px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -345,8 +368,10 @@
 }
 
 .worker-request-panel {
-  min-height: clamp(360px, 58vh, 660px);
-  padding: 22px 18px;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: auto;
+  padding: 14px 18px;
   box-sizing: border-box;
 }
 
@@ -448,7 +473,8 @@
 }
 
 .save-bar {
-  min-height: 72px;
+  min-height: 64px;
+  flex: 0 0 64px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -575,6 +601,7 @@
 
   .topbar {
     height: 62px;
+    flex-basis: 62px;
   }
 
   .brand-copy span {
@@ -587,15 +614,15 @@
   }
 
   .page-heading {
-    min-height: 125px;
+    min-height: 90px;
   }
 
   .page-heading h1 {
-    font-size: 31px;
+    font-size: 27px;
   }
 
   .record-total {
-    padding-top: 20px;
+    padding-top: 0;
   }
 
   .table-toolbar {
@@ -625,12 +652,6 @@
   .table-actions .button {
     padding-inline: 9px;
     font-size: 11px;
-  }
-
-  .table-host,
-  .empty-state {
-    height: 58vh;
-    min-height: 330px;
   }
 
   .table-host > div,
