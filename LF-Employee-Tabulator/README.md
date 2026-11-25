@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Use **Preview with 3,000 sample requests** to exercise the grid without a form.
+Use **Preview with 3,000 sample requests** to exercise the employee grid and additional-worker tab without a Laserfiche form. Preview saves update the page locally and do not write form data.
 
 ## Deploy to GitHub Pages
 
@@ -27,7 +27,7 @@ The grid displays employee number, name, current status, request status, worksit
 
 The Current Status and Request Status header filters are dropdowns. The Farm filter is also a dropdown, with the supplied worksite choices and a Blank option.
 
-The **Additional workers** tab allows any user to request a quantity of workers for a selected farm (up to 1,000 per add action), with optional name, phone number, and email per worker. Each generated worker receives a unique negative employee number for routing as a temporary worker within the current page session. These rows are saved through the same output table with Request Status `Requested`; flight and preferred-date fields remain blank/default.
+The **Additional workers** tab allows any user to request a quantity of workers for a selected farm (up to 1,000 per add action), with optional name, phone number, and email per worker. Add another batch after selecting a different farm to make a multi-farm request. Each generated worker receives a unique negative employee number for routing as a temporary worker within the current page session. These rows are saved through the same output table with Request Status `Requested`; flight and preferred-date fields remain blank/default. Saved worker rows stay visible and can be removed before submitting the form; removal deletes the matching temporary-worker row from output table `71`. This removal control applies only to additional-worker requests; saved employee request rows cannot currently be removed from the page.
 
 Only `HR` and `Manager` are recognized roles. An absent or unknown role leaves the grid read-only and displays an error. HR may edit flight fields while Request Status is `Requested` or `Request Return`, and may move those statuses to `Flight Booked` or `Return Flight Booked`, respectively. Managers may set a blank status to `Requested` and `Arrived` to `Request Return`; Farm and requested date are editable only for eligible nonblank statuses other than `Arrived` and the booked statuses. Booked statuses keep Request Status and flight fields read-only. Preferred arrival/departure dates are constrained to tomorrow or later.
 
@@ -64,7 +64,7 @@ The page receives one `employee-tabulator:init` payload:
 
 Selecting an existing flight number fills its carrier, route, date/time, and type; entering a new number clears those details for manual entry. Flight type is `Arrival` or `Departure`. Date/time values use the LFForm DateTime shape `{ dateStr, timeStr? }`.
 
-On **Save changes**, the page sends one `{ type: "employee-request:save", requests: [...] }` message. Each changed row includes employee number, request status, farm, preferred date, flight number, carrier, origin, destination, combined flight date/time, and flight type. The form appends these rows to output table field `71` using:
+**Save all changes** saves pending employee edits and unsaved additional-worker requests together, regardless of which tab is open. The page sends one `{ type: "employee-request:save", requests: [...] }` message. Each changed row includes employee number, request status, farm, preferred date, flight number, carrier, origin, destination, combined flight date/time, and flight type. The form appends these rows to output table field `71` using:
 
 | Output column | Field ID |
 | --- | ---: |
@@ -83,3 +83,7 @@ On **Save changes**, the page sends one `{ type: "employee-request:save", reques
 | New Hire Name | 120 |
 
 Blank request status, farm, and flight number values are written as `Cancel`, `TBD`, and `TBD`; blank dates use `{ dateStr: "1900-01-01" }`. New Hire Name is populated only for temporary workers with a negative employee number and is blank when not provided; it remains blank for standard employee requests. Phone number and email are blank when not provided. There is no separate flight output table or second iframe.
+
+After a save starts, the bridge overwrites CustomHTML field `122` with a saving notice. After a successful save, it overwrites the field with a Review summary of all successful saves in the current page session, including employee names and flight details. Specific new-worker requests (those with a name or contact information) are listed individually under **Specific New Worker Requests**; anonymous requests are grouped by farm under **Unspecified New Worker Requests**. Temporary negative employee numbers are not shown in the summary. Removing a saved new-worker request also updates the summary. The summary is held in memory and does not persist across a page reload.
+
+The form's `Submit_Status` field (default `True`) is a submission latch. The bridge sets it to `False` before writing output rows and back to `True` only after all writes succeed. The `onFormSubmission` handler blocks submission while the latch is false or the save has failed.

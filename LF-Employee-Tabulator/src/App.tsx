@@ -34,9 +34,13 @@ type TemporaryWorkerRow = {
   FullName: string
   PhoneNumber: string
   Email: string
+  Saved: boolean
 }
 
 type PageTab = 'employee-requests' | 'additional-workers'
+type PendingOperation =
+  | { kind: 'save'; employeeRows: RequestRow[]; workerRowIds: string[] }
+  | { kind: 'remove-worker'; workerRowId: string }
 
 const FLIGHT_FIELDS = [
   'Flight_Number',
@@ -313,13 +317,14 @@ function isCellEditable(
 function updateEditableCellStyles(
   row: RowComponent,
   role: UserRole | null,
+  saving = false,
 ) {
   const rowData = row.getData() as EmployeeRow
   for (const cell of row.getCells()) {
     const columnEditable = cell.getColumn().getDefinition().editable !== false
     cell.getElement().classList.toggle(
       'is-editable',
-      isCellEditable(role, rowData, String(cell.getField()), columnEditable),
+      !saving && isCellEditable(role, rowData, String(cell.getField()), columnEditable),
     )
   }
 }
@@ -508,7 +513,8 @@ function App() {
   const table = useRef<Tabulator | null>(null)
   const formWindow = useRef<Window | null>(null)
   const nextTemporaryEmployeeNumber = useRef(-1)
-  const savingTemporaryWorkers = useRef(false)
+  const savingRef = useRef(false)
+  const pendingOperation = useRef<PendingOperation | null>(null)
   const previewMode = useRef(false)
   const role = useRef<UserRole | null>(null)
   const flightDefinitions = useRef(new Map<string, Record<string, unknown>>())
@@ -530,6 +536,12 @@ function App() {
   const [rowCount, setRowCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState('')
+
+  function setSavingState(value: boolean) {
+    savingRef.current = value
+    setSaving(value)
+    table.current?.redraw(true)
+  }
 
   function trackUpdate(row: EmployeeRow) {
     const original = originalRows.current.get(row.__lfRowId)
@@ -606,22 +618,50 @@ function App() {
 
       if (data?.type === 'employee-request:saved') {
         if (event.source !== formWindow.current) return
-        setSaving(false)
+        const operation = pendingOperation.current
+        if (operation?.kind !== 'save') return
+        setSavingState(false)
         const rowsSaved = Number(data.rowsSaved) || 0
-        if (savingTemporaryWorkers.current) {
-          setTemporaryWorkers([])
-          savingTemporaryWorkers.current = false
-          setSaveNotice(`${rowsSaved} additional worker request(s) saved to the form.`)
-        } else {
-          setSaveNotice(`${rowsSaved} employee travel row(s) saved to the form.`)
+        for (const row of operation.employeeRows) {
+          originalRows.current.set(row.__lfRowId, requestSnapshot(row))
+          originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
         }
+        const savedWorkerIds = new Set(operation.workerRowIds)
+        setTemporaryWorkers((current) =>
+          current.map((worker) =>
+            savedWorkerIds.has(worker.__lfRowId) ? { ...worker, Saved: true } : worker,
+          ),
+        )
+        pendingOperation.current = null
+        setChangeCount(updatedRows.current.size)
+        setSaveNotice(`${rowsSaved} pending request row(s) saved. Saved worker requests remain available to remove.`)
+        return
+      }
+
+      if (data?.type === 'employee-request:workers-removed') {
+        if (event.source !== formWindow.current) return
+        const operation = pendingOperation.current
+        if (operation?.kind !== 'remove-worker') return
+        setSavingState(false)
+        setTemporaryWorkers((current) =>
+          current.filter((worker) => worker.__lfRowId !== operation.workerRowId),
+        )
+        pendingOperation.current = null
+        setSaveNotice('Saved worker request removed.')
         return
       }
 
       if (data?.type === 'employee-request:save-error') {
         if (event.source !== formWindow.current) return
-        setSaving(false)
-        savingTemporaryWorkers.current = false
+        const operation = pendingOperation.current
+        if (operation?.kind === 'save') {
+          for (const row of operation.employeeRows) {
+            updatedRows.current.set(row.__lfRowId, row)
+          }
+          setChangeCount(updatedRows.current.size)
+        }
+        pendingOperation.current = null
+        setSavingState(false)
         setSaveNotice(`The form could not save employee travel rows: ${String(data.message ?? 'Unknown error')}`)
         return
       }
@@ -717,6 +757,7 @@ function App() {
       ...column,
       editor: column.editor ?? 'input',
       editable: (cell: { getRow: () => RowComponent; getField: () => string }) => {
+        if (savingRef.current) return false
         return isCellEditable(
           role.current,
           cell.getRow().getData() as EmployeeRow,
@@ -739,7 +780,7 @@ function App() {
       reactiveData: false,
       columnDefaults: { vertAlign: 'middle', tooltip: true },
       rowFormatter: (row) =>
-        updateEditableCellStyles(row, role.current),
+        updateEditableCellStyles(row, role.current, savingRef.current),
     })
 
     grid.on('cellEdited', (cell: CellComponent) => {
@@ -795,41 +836,7 @@ function App() {
   }, [activeTab, columns, ready, rows])
 
   function saveChanges() {
-    if (activeTab === 'additional-workers') {
-      if (temporaryWorkers.length === 0 || saving) return
-      const payload: RequestChangeSet = {
-        type: 'employee-request:save',
-        requests: temporaryWorkers.map((worker) => ({
-          Employee_Number: worker.Employee_Number,
-          FullName: worker.FullName,
-          Request_Status: 'Requested',
-          Farm: worker.Farm,
-          Preferred_Arrival_By: '',
-          Flight_Number: '',
-          Flight_Carrier: '',
-          Flight_Origin: '',
-          Flight_Destination: '',
-          Flight_DateTime: '',
-          Flight_Type: '',
-          PhoneNumber: worker.PhoneNumber,
-          Email: worker.Email,
-        })),
-      }
-      if (previewMode.current) {
-        setTemporaryWorkers([])
-        setSaveNotice(`${payload.requests.length} additional worker request(s) saved in preview.`)
-        return
-      }
-      if (!formWindow.current) {
-        setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
-        return
-      }
-      savingTemporaryWorkers.current = true
-      formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
-      setSaveNotice('Additional worker requests sent to the form.')
-      setSaving(true)
-      return
-    }
+    if (savingRef.current) return
 
     const changedRows = [...updatedRows.current.values()].filter((row) => {
       const original = originalRows.current.get(row.__lfRowId)
@@ -841,21 +848,6 @@ function App() {
       }
     }
     setChangeCount(changedRows.length)
-
-    if (previewMode.current) {
-      for (const row of changedRows) {
-        originalRows.current.set(row.__lfRowId, requestSnapshot(row))
-        originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
-      }
-      updatedRows.current.clear()
-      setChangeCount(0)
-      setSaveNotice('Employee travel updates saved in preview.')
-      return
-    }
-    if (!formWindow.current) {
-      setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
-      return
-    }
 
     const invalidRows = changedRows.filter((row) => {
       const flightChanged = originalFlightRows.current.get(row.__lfRowId) !== flightSnapshot(row)
@@ -873,15 +865,61 @@ function App() {
       return
     }
 
+    const unsavedWorkers = temporaryWorkers.filter((worker) => !worker.Saved)
+    const workerRowIds = unsavedWorkers.map((worker) => worker.__lfRowId)
     const payload: RequestChangeSet = {
       type: 'employee-request:save',
-      requests: (changedRows as RequestRow[]).map(toRequestPayload),
+      requests: [
+        ...(changedRows as RequestRow[]).map(toRequestPayload),
+        ...unsavedWorkers.map((worker) => ({
+          Employee_Number: worker.Employee_Number,
+          FullName: worker.FullName,
+          Request_Status: 'Requested',
+          Farm: worker.Farm,
+          Preferred_Arrival_By: '',
+          Flight_Number: '',
+          Flight_Carrier: '',
+          Flight_Origin: '',
+          Flight_Destination: '',
+          Flight_DateTime: '',
+          Flight_Type: '',
+          PhoneNumber: worker.PhoneNumber,
+          Email: worker.Email,
+        })),
+      ],
     }
-    formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
+    if (payload.requests.length === 0) return
+
+    if (previewMode.current) {
+      for (const row of changedRows) {
+        originalRows.current.set(row.__lfRowId, requestSnapshot(row))
+        originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
+      }
+      updatedRows.current.clear()
+      setTemporaryWorkers((current) =>
+        current.map((worker) =>
+          workerRowIds.includes(worker.__lfRowId) ? { ...worker, Saved: true } : worker,
+        ),
+      )
+      setChangeCount(0)
+      setSaveNotice(`${changedRows.length} employee change(s) and ${unsavedWorkers.length} new worker request(s) saved in preview.`)
+      return
+    }
+    if (!formWindow.current) {
+      setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
+      return
+    }
+
+    pendingOperation.current = {
+      kind: 'save',
+      employeeRows: changedRows as RequestRow[],
+      workerRowIds,
+    }
     updatedRows.current.clear()
     setChangeCount(0)
-    setSaveNotice('Employee travel updates sent to the form.')
-    setSaving(true)
+    setSaveNotice('Saving employee and new worker requests...')
+    setSavingState(true)
+    formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
   }
 
   function addTemporaryWorkers() {
@@ -905,9 +943,11 @@ function App() {
         FullName: '',
         PhoneNumber: '',
         Email: '',
+        Saved: false,
       }
     })
     setTemporaryWorkers((current) => [...current, ...newWorkers])
+    setWorkerFarm('')
     setWorkerError('')
     setSaveNotice('')
   }
@@ -923,6 +963,36 @@ function App() {
       ),
     )
     setSaveNotice('')
+  }
+
+  function removeTemporaryWorker(rowId: string) {
+    if (savingRef.current) return
+    const worker = temporaryWorkers.find((entry) => entry.__lfRowId === rowId)
+    if (!worker) return
+
+    if (!worker.Saved || previewMode.current) {
+      setTemporaryWorkers((current) =>
+        current.filter((entry) => entry.__lfRowId !== rowId),
+      )
+      setSaveNotice('')
+      return
+    }
+
+    if (!formWindow.current) {
+      setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
+      return
+    }
+
+    pendingOperation.current = { kind: 'remove-worker', workerRowId: rowId }
+    setSaveNotice('Removing saved worker request...')
+    setSavingState(true)
+    formWindow.current.postMessage(
+      {
+        type: 'employee-request:remove-temporary-workers',
+        employeeNumbers: [worker.Employee_Number],
+      },
+      LF_SANDBOX_ORIGIN,
+    )
   }
 
   function loadSample() {
@@ -995,6 +1065,9 @@ function App() {
     setMessage('')
   }
 
+  const unsavedWorkerCount = temporaryWorkers.filter((worker) => !worker.Saved).length
+  const pendingChangeCount = changeCount + unsavedWorkerCount
+
   return (
     <main className="workspace">
       <section className="page-heading">
@@ -1063,7 +1136,7 @@ function App() {
               <div className="table-title"><span className="section-index">02</span><h2>Request additional workers</h2><span className="count-chip">{temporaryWorkers.length}</span></div>
             </div>
             <div className="worker-request-panel">
-              <p className="worker-request-intro">Request a number of workers for a farm. Names and contact details are optional and can be entered per worker.</p>
+              <p className="worker-request-intro">Add workers for one farm at a time. Select another farm and add more workers to build a multi-farm request. Names and contact details are optional.</p>
               <div className="worker-request-controls">
                 <label>
                   Farm
@@ -1097,16 +1170,18 @@ function App() {
                 <div className="worker-list-wrap">
                   <table className="worker-list">
                     <thead>
-                      <tr><th>Temporary employee #</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th><span className="sr-only">Actions</span></th></tr>
+                      <tr><th>Temporary employee #</th><th>Farm</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th>Save status</th><th><span className="sr-only">Actions</span></th></tr>
                     </thead>
                     <tbody>
                       {temporaryWorkers.map((worker) => (
                         <tr key={worker.__lfRowId}>
                           <td>{worker.Employee_Number}</td>
-                          <td><input aria-label={`Name for temporary employee ${worker.Employee_Number}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving} /></td>
-                          <td><input aria-label={`Phone number for temporary employee ${worker.Employee_Number}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving} /></td>
-                          <td><input aria-label={`Email for temporary employee ${worker.Employee_Number}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving} /></td>
-                          <td><button className="remove-worker" type="button" onClick={() => setTemporaryWorkers((current) => current.filter((entry) => entry.__lfRowId !== worker.__lfRowId))} disabled={saving} aria-label={`Remove temporary employee ${worker.Employee_Number}`}>Remove</button></td>
+                          <td>{worker.Farm}</td>
+                          <td><input aria-label={`Name for temporary employee ${worker.Employee_Number}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td><input aria-label={`Phone number for temporary employee ${worker.Employee_Number}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td><input aria-label={`Email for temporary employee ${worker.Employee_Number}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td>{worker.Saved ? 'Saved' : 'Pending'}</td>
+                          <td><button className="remove-worker" type="button" onClick={() => removeTemporaryWorker(worker.__lfRowId)} disabled={saving} aria-label={`Remove temporary employee ${worker.Employee_Number}`}>Remove</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -1116,18 +1191,18 @@ function App() {
             </div>
             <footer className="table-footer">
               <span><span className="footer-dot" /> {ready ? 'Additional requests are held until saved' : 'No data loaded'}</span>
-              <span>{temporaryWorkers.length} worker{temporaryWorkers.length === 1 ? '' : 's'} prepared</span>
+              <span>{unsavedWorkerCount} pending, {temporaryWorkers.length - unsavedWorkerCount} saved</span>
             </footer>
           </div>
         )}
       </section>
 
       <div className="save-bar">
-        <span>{saveNotice || (activeTab === 'additional-workers'
-          ? `${temporaryWorkers.length} worker${temporaryWorkers.length === 1 ? '' : 's'} ready to send`
-          : changeCount ? `${changeCount} change${changeCount === 1 ? '' : 's'} ready to send` : 'No changes to send yet')}</span>
-        <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || (activeTab === 'additional-workers' ? !temporaryWorkers.length : !changeCount) || saving}>
-          {saving ? 'Changes sent' : activeTab === 'additional-workers' ? 'Save worker requests' : 'Save changes'} <span aria-hidden="true">↗</span>
+        <span>{saveNotice || (pendingChangeCount
+          ? `${changeCount} employee change${changeCount === 1 ? '' : 's'} and ${unsavedWorkerCount} new worker request${unsavedWorkerCount === 1 ? '' : 's'} ready to save`
+          : 'No changes to send yet')}</span>
+        <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || pendingChangeCount === 0 || saving}>
+          {saving ? 'Saving changes...' : 'Save all changes'} <span aria-hidden="true">↗</span>
         </button>
       </div>
     </main>

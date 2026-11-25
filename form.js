@@ -96,6 +96,8 @@ function toTabulatorData(input) {
 }
 
 const TABULATOR_ORIGIN = "https://jealous-fruits.github.io";
+const SUBMIT_STATUS_FIELD = Object.freeze({ variableName: "Submit_Status" });
+const SAVE_SUMMARY_FIELD = Object.freeze({ fieldId: 122 });
 let tabulatorWindow = null;
 let helloTimer = null;
 let employeeTableReady = false;
@@ -104,6 +106,39 @@ let farmTableReady = false;
 let roleReady = false;
 let initialDataSent = false;
 let helloScanLogged = false;
+let saveInProgress = false;
+let submissionBlocked = false;
+let pendingReviewRequests = [];
+
+function isSubmitStatusTrue() {
+  const fieldValue = LFForm.getFieldValues(SUBMIT_STATUS_FIELD);
+  const value = Array.isArray(fieldValue) ? fieldValue[0] : fieldValue;
+  if (value && typeof value === "object") {
+    return String(value.data ?? value.value ?? value.label ?? "")
+      .trim()
+      .toLowerCase() === "true";
+  }
+  return value === true || String(value ?? "").trim().toLowerCase() === "true";
+}
+
+async function setSubmissionStatus(allowed) {
+  const expectedValue = allowed ? "True" : "False";
+  await LFForm.setFieldValues(SUBMIT_STATUS_FIELD, expectedValue);
+  if (isSubmitStatusTrue() !== allowed) {
+    throw new Error(`Submit_Status did not update to ${expectedValue}.`);
+  }
+}
+
+LFForm.onFormSubmission(() => {
+  try {
+    if (!submissionBlocked && isSubmitStatusTrue()) return;
+  } catch (error) {
+    console.error("[LF bridge] could not verify submission status", error);
+  }
+  return {
+    error: "Employee request data has not finished saving. Wait for the save to complete before submitting.",
+  };
+});
 
 console.info("[LF bridge] script started", {
   origin: window.location.origin,
@@ -241,6 +276,111 @@ function requestDateTime(value) {
   };
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]);
+}
+
+function summaryDateTime(value) {
+  const source = value && typeof value === "object" ? value : null;
+  const date = String(source?.dateStr ?? value ?? "").trim();
+  const time = String(source?.timeStr ?? "").trim();
+  return [date, time].filter(Boolean).join(" ");
+}
+
+function buildSaveSummary(requests) {
+  const employeeSummaries = [];
+  const specificNewHireSummaries = [];
+  const anonymousNewHiresByFarm = new Map();
+
+  for (const rawRequest of requests) {
+    const request = rawRequest ?? {};
+    const employeeNumber = String(request.Employee_Number ?? "").trim();
+    const isNewHire = Number(employeeNumber) < 0;
+    const name = String(request.FullName ?? "").trim();
+    const phoneNumber = String(request.PhoneNumber ?? "").trim();
+    const email = String(request.Email ?? "").trim();
+    const farm = requestTextOrDefault(request.Farm, "Unspecified farm");
+
+    if (isNewHire && !name && !phoneNumber && !email) {
+      anonymousNewHiresByFarm.set(
+        farm,
+        (anonymousNewHiresByFarm.get(farm) ?? 0) + 1,
+      );
+      continue;
+    }
+
+    const details = [
+      `Status: ${requestTextOrDefault(request.Request_Status, "Cancel")}`,
+      `Farm: ${farm}`,
+    ];
+
+    if (isNewHire) {
+      if (phoneNumber) details.push(`Phone: ${phoneNumber}`);
+      if (email) details.push(`Email: ${email}`);
+      specificNewHireSummaries.push(
+        `<li><strong>${escapeHtml(name || "New hire (contact provided)")}</strong> — ${details
+          .map(escapeHtml)
+          .join("; ")}</li>`,
+      );
+      continue;
+    }
+
+    const preferredArrival = summaryDateTime(request.Preferred_Arrival_By);
+    if (preferredArrival) {
+      details.push(`Preferred arrival/departure: ${preferredArrival}`);
+    }
+
+    const flightDateTime = summaryDateTime(request.Flight_DateTime);
+    const flightDetails = [
+      `Number: ${requestTextOrDefault(request.Flight_Number, "TBD")}`,
+      request.Flight_Carrier ? `Carrier: ${request.Flight_Carrier}` : "",
+      request.Flight_Origin || request.Flight_Destination
+        ? `Route: ${request.Flight_Origin || "?"} to ${request.Flight_Destination || "?"}`
+        : "",
+      flightDateTime ? `Date/time: ${flightDateTime}` : "",
+      request.Flight_Type ? `Type: ${request.Flight_Type}` : "",
+    ].filter(Boolean);
+    details.push(`Flight: ${flightDetails.join("; ")}`);
+
+    const employeeName = String(request.FullName ?? "").trim();
+    employeeSummaries.push(
+      `<li><strong>Employee #${escapeHtml(employeeNumber || "unknown")}${employeeName ? ` — ${escapeHtml(employeeName)}` : ""}</strong> — ${details
+        .map(escapeHtml)
+        .join("; ")}</li>`,
+    );
+  }
+
+  const anonymousNewHireCount = [...anonymousNewHiresByFarm.values()]
+    .reduce((total, count) => total + count, 0);
+  const newHireCount = specificNewHireSummaries.length + anonymousNewHireCount;
+  const anonymousNewHireSummaries = [...anonymousNewHiresByFarm.entries()]
+    .map(([farm, count]) => {
+      const hireLabel = count === 1 ? "new hire" : "new hires";
+      return `<li>${count} ${hireLabel} requested for ${escapeHtml(farm)}</li>`;
+    });
+  const employeeSection = employeeSummaries.length
+    ? `<h4>Employee requests</h4><ul>${employeeSummaries.join("")}</ul>`
+    : "";
+  const specificNewHireSection = specificNewHireSummaries.length
+    ? `<h4>Specific New Worker Requests</h4><ul>${specificNewHireSummaries.join("")}</ul>`
+    : "";
+  const anonymousNewHireSection = anonymousNewHireSummaries.length
+    ? `<h4>Unspecified New Worker Requests</h4><ul>${anonymousNewHireSummaries.join("")}</ul>`
+    : "";
+
+  return `<h3>Review pending changes</h3><p>${employeeSummaries.length} employee request(s) and ${newHireCount} new hire(s) are pending submission. Verify these details before submitting the form.</p>${employeeSection}${specificNewHireSection}${anonymousNewHireSection}`;
+}
+
+async function writeSaveSummary(content) {
+  await LFForm.changeFieldSettings(SAVE_SUMMARY_FIELD, { content });
+}
+
 async function setOutputFieldValue(fieldName, fieldId, index, value) {
   try {
     await LFForm.setFieldValues({ fieldId, index }, value);
@@ -371,6 +511,50 @@ async function appendEmployeeRequestsToOutputTable(requests) {
   return requests.length;
 }
 
+async function removeTemporaryWorkerRows(employeeNumbers) {
+  const requestedNumbers = [...new Set(
+    employeeNumbers.map((value) => String(value).trim()),
+  )];
+  if (requestedNumbers.some(
+    (value) => !value || !Number.isFinite(Number(value)) || Number(value) >= 0,
+  )) {
+    throw new Error("Temporary worker removals require negative employee numbers.");
+  }
+
+  const outputNumbers = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.request.output.employeeNumber,
+  });
+  const outputRows = Array.isArray(outputNumbers)
+    ? outputNumbers
+    : outputNumbers == null || outputNumbers === ""
+      ? []
+      : [outputNumbers];
+  const requestedSet = new Set(requestedNumbers);
+  const matchingIndices = outputRows
+    .map((value, index) => ({ value: String(value ?? "").trim(), index }))
+    .filter((entry) => requestedSet.has(entry.value));
+  const foundNumbers = new Set(matchingIndices.map((entry) => entry.value));
+  const missingNumbers = requestedNumbers.filter((value) => !foundNumbers.has(value));
+  if (missingNumbers.length) {
+    throw new Error(`Could not find saved worker row(s): ${missingNumbers.join(", ")}.`);
+  }
+
+  const indicesToDelete = matchingIndices
+    .map((entry) => entry.index)
+    .sort((left, right) => right - left);
+  for (const index of indicesToDelete) {
+    await LFForm.deleteRow(
+      { fieldId: FIELD_IDS.request.outputTable },
+      index,
+    );
+  }
+
+  pendingReviewRequests = pendingReviewRequests.filter(
+    (request) => !requestedSet.has(String(request.Employee_Number ?? "").trim()),
+  );
+  return requestedNumbers.length;
+}
+
 window.addEventListener("message", (event) => {
   if (event.data?.type !== "employee-tabulator:ready") return;
 
@@ -394,19 +578,63 @@ window.addEventListener("message", (event) => {
 });
 
 window.addEventListener("message", async (event) => {
+  const isSaveRequest = event.data?.type === "employee-request:save" &&
+    Array.isArray(event.data.requests);
+  const isWorkerRemoval = event.data?.type ===
+    "employee-request:remove-temporary-workers" &&
+    Array.isArray(event.data.employeeNumbers);
   if (
     event.origin !== TABULATOR_ORIGIN ||
+    !event.source ||
     event.source !== tabulatorWindow ||
-    event.data?.type !== "employee-request:save" ||
-    !Array.isArray(event.data.requests)
+    (!isSaveRequest && !isWorkerRemoval)
   ) {
     return;
   }
 
-  try {
-    const rowsSaved = await appendEmployeeRequestsToOutputTable(
-      event.data.requests,
+  if (saveInProgress) {
+    event.source.postMessage(
+      {
+        type: "employee-request:save-error",
+        message: "An employee request save is already in progress.",
+      },
+      TABULATOR_ORIGIN,
     );
+    return;
+  }
+
+  saveInProgress = true;
+  submissionBlocked = true;
+
+  try {
+    await writeSaveSummary(
+      isWorkerRemoval
+        ? "<p>Removing saved worker request. Please wait...</p>"
+        : "<p>Saving employee request changes. Please wait...</p>",
+    );
+    await setSubmissionStatus(false);
+    if (isWorkerRemoval) {
+      const removedCount = await removeTemporaryWorkerRows(
+        event.data.employeeNumbers,
+      );
+      await writeSaveSummary(buildSaveSummary(pendingReviewRequests));
+      await setSubmissionStatus(true);
+      submissionBlocked = false;
+      event.source.postMessage(
+        { type: "employee-request:workers-removed", removedCount },
+        TABULATOR_ORIGIN,
+      );
+      return;
+    }
+
+    const requestsToSave = event.data.requests.map((request) =>
+      request && typeof request === "object" ? { ...request } : {},
+    );
+    const rowsSaved = await appendEmployeeRequestsToOutputTable(requestsToSave);
+    pendingReviewRequests = pendingReviewRequests.concat(requestsToSave);
+    await writeSaveSummary(buildSaveSummary(pendingReviewRequests));
+    await setSubmissionStatus(true);
+    submissionBlocked = false;
     console.info("[LF bridge] employee requests saved", { rowsSaved });
     event.source.postMessage(
       { type: "employee-request:saved", rowsSaved },
@@ -414,6 +642,13 @@ window.addEventListener("message", async (event) => {
     );
   } catch (error) {
     console.error("[LF bridge] could not save employee requests", error);
+    try {
+      await writeSaveSummary(
+        `<h3>Save incomplete</h3><p>The latest changes could not be saved completely. Do not submit the form until the save succeeds.</p>${pendingReviewRequests.length ? buildSaveSummary(pendingReviewRequests) : ""}`,
+      );
+    } catch (summaryError) {
+      console.error("[LF bridge] could not update save summary", summaryError);
+    }
     event.source.postMessage(
       {
         type: "employee-request:save-error",
@@ -421,6 +656,8 @@ window.addEventListener("message", async (event) => {
       },
       TABULATOR_ORIGIN,
     );
+  } finally {
+    saveInProgress = false;
   }
 });
 
