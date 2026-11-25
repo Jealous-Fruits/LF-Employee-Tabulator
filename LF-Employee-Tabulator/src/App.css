@@ -448,11 +448,6 @@
   white-space: nowrap;
 }
 
-.worker-list td:first-child {
-  color: var(--muted);
-  white-space: nowrap;
-}
-
 .remove-worker {
   border: 0;
   padding: 5px;
@@ -569,13 +564,14 @@
 }
 
 .tabulator .tabulator-cell.is-editable {
-  background-color: #f1f6f2;
-  box-shadow: inset 0 -2px 0 #b6cdbd;
+  background-color: #fbf1ed;
+  box-shadow: inset 0 0 0 1px #e7c7ba, inset 0 -2px 0 #c5866d;
   cursor: pointer;
 }
 
 .tabulator .tabulator-cell.is-editable:hover {
-  background-color: #e7f0e9;
+  background-color: #f7e8e0;
+  box-shadow: inset 0 0 0 1px #d9b0a0, inset 0 -2px 0 #bb684c;
 }
 
 .tabulator .tabulator-cell.tabulator-editing {

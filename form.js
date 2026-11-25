@@ -8,7 +8,6 @@ const FIELD_IDS = Object.freeze({
     origin: 103,
     destination: 104,
     date: 105,
-    type: 106,
     request_status: 107,
     requested_arrival: 108,
     farm: 109,
@@ -28,7 +27,6 @@ const FIELD_IDS = Object.freeze({
       origin: 114,
       destination: 115,
       flightDateTime: 116,
-      flightType: 117,
       phoneNumber: 118,
       email: 119,
       newHireName: 120,
@@ -216,7 +214,6 @@ function readFlightRows() {
     Flight_Origin: readTableColumn(FIELD_IDS.flight.origin),
     Flight_Destination: readTableColumn(FIELD_IDS.flight.destination),
     Flight_Date: readTableColumn(FIELD_IDS.flight.date),
-    Flight_Type: readTableColumn(FIELD_IDS.flight.type),
     Request_Status: readTableColumn(FIELD_IDS.request.flightStatus),
     Farm: readTableColumn(FIELD_IDS.request.flightFarm),
     Requested_Arrival: readTableColumn(FIELD_IDS.request.requestedArrival),
@@ -401,7 +398,6 @@ function buildSaveSummary(requests) {
         ? `Route: ${request.Flight_Origin || "?"} to ${request.Flight_Destination || "?"}`
         : "",
       flightDateTime ? `Date/time: ${flightDateTime}` : "",
-      request.Flight_Type ? `Type: ${request.Flight_Type}` : "",
     ].filter(Boolean);
     details.push(`Flight: ${flightDetails.join("; ")}`);
 
@@ -531,12 +527,6 @@ async function appendEmployeeRequestsToOutputTable(requests) {
         FIELD_IDS.request.output.flightDateTime,
         index,
         requestDateTime(request.Flight_DateTime),
-      ),
-      setOutputFieldValue(
-        "flightType",
-        FIELD_IDS.request.output.flightType,
-        index,
-        String(request.Flight_Type ?? ""),
       ),
       setOutputFieldValue(
         "phoneNumber",
@@ -775,7 +765,7 @@ LFForm.onFieldChange(
     flightLookupReady = true;
     sendDataToTabulator();
   },
-  { fieldId: FIELD_IDS.flight.type },
+  { fieldId: FIELD_IDS.flight.number },
 );
 
 LFForm.onFieldChange(

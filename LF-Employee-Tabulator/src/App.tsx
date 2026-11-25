@@ -24,7 +24,6 @@ type RequestRow = EmployeeRow & {
   Flight_Destination: string
   Flight_Date: string
   Flight_Time: string
-  Flight_Type: string
 }
 
 type TemporaryWorkerRow = {
@@ -49,9 +48,16 @@ const FLIGHT_FIELDS = [
   'Flight_Destination',
   'Flight_Date',
   'Flight_Time',
-  'Flight_Type',
 ] as const
 const FLIGHT_DEFINITION_FIELDS = FLIGHT_FIELDS.filter((field) => field !== 'Flight_Number')
+const AIRLINE_OPTIONS = [
+  'Air Canada',
+  'WestJet',
+  'Porter Airlines',
+  'Air Transat',
+  'Flair Airlines',
+  'Canadian North',
+]
 const MAX_WORKERS_PER_ADD = 1000
 const LF_SANDBOX_ORIGIN = 'https://sandbox-forms.laserfiche.ca'
 
@@ -100,15 +106,19 @@ function buildRequestRows(
       flight.Request_Status || flight.Farm || flight.Requested_Arrival,
     ) ?? {}
     const requestStatus = String(request.Request_Status ?? '')
-    const flightType = requestStatus === 'Request Return' ||
-      requestStatus === 'Return Flight Booked'
-      ? 'Departure'
-      : 'Arrival'
-    const assignedFlight = employeeFlights.find(
-      (flight) => String(flight.Flight_Type ?? '').toLowerCase() === flightType.toLowerCase(),
+    const activeFlight = employeeFlights.find((flight) =>
+      [
+        flight.Flight_Number,
+        flight.Flight_Carrier,
+        flight.Flight_Origin,
+        flight.Flight_Destination,
+        dateForGrid(flight.Flight_Date),
+        timeForGrid(flight.Flight_Date),
+        flight.Flight_Time,
+      ].some((value) => String(value ?? '').trim()),
     ) ?? {}
-    const flightNumber = String(assignedFlight.Flight_Number ?? '')
-    const flight = flightByNumber.get(flightNumber) ?? assignedFlight
+    const flightNumber = String(activeFlight.Flight_Number ?? '')
+    const flight = flightByNumber.get(flightNumber) ?? activeFlight
     const flightDate = flight.Flight_Date
     return {
       Employee_Number: employeeNumber,
@@ -126,7 +136,6 @@ function buildRequestRows(
       Flight_Date: dateForGrid(flightDate),
       Flight_Time: timeForGrid(flightDate) ||
         laserTimeToInput(String(flight.Flight_Time ?? '')),
-      Flight_Type: String(flight.Flight_Type ?? ''),
       __lfRowId: `request-${index}`,
     }
   })
@@ -144,7 +153,6 @@ function toRequestPayload(row: RequestRow): Record<string, unknown> {
     Flight_Origin: row.Flight_Origin,
     Flight_Destination: row.Flight_Destination,
     Flight_DateTime: dateTimeForLaser(row.Flight_Date, row.Flight_Time),
-    Flight_Type: row.Flight_Type,
     PhoneNumber: row.PhoneNumber ?? '',
     Email: row.Email ?? '',
   }
@@ -154,6 +162,46 @@ function flightDefinition(row: EmployeeRow): Record<string, unknown> {
   return Object.fromEntries(
     FLIGHT_DEFINITION_FIELDS.map((field) => [field, row[field] ?? '']),
   )
+}
+
+function updateFlightAutocompleteOption(
+  flightNumber: string,
+  definition: Record<string, unknown>,
+  options: Record<string, string>,
+) {
+  if (!flightNumber) return
+  if (flightHasNotHappened(definition)) {
+    options[flightNumber] = flightNumber
+  } else {
+    delete options[flightNumber]
+  }
+}
+
+function refreshFlightAutocompleteOptions(
+  definitions: Map<string, Record<string, unknown>>,
+  options: Record<string, string>,
+) {
+  for (const flightNumber of Object.keys(options)) {
+    delete options[flightNumber]
+  }
+  for (const [flightNumber, definition] of definitions) {
+    updateFlightAutocompleteOption(flightNumber, definition, options)
+  }
+}
+
+function updateFlightDefinition(
+  flightNumber: string,
+  row: EmployeeRow,
+  definitions: Map<string, Record<string, unknown>>,
+  options: Record<string, string>,
+) {
+  if (!flightNumber) return
+  const definition = {
+    Flight_Number: flightNumber,
+    ...flightDefinition(row),
+  }
+  definitions.set(flightNumber, definition)
+  updateFlightAutocompleteOption(flightNumber, definition, options)
 }
 
 function laserTimeToInput(value: string): string {
@@ -190,6 +238,40 @@ function timeForGrid(value: unknown): string {
   return ''
 }
 
+function flightHasNotHappened(flight: Record<string, unknown>, now = new Date()): boolean {
+  const dateMatch = dateForGrid(flight.Flight_Date).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!dateMatch) return false
+
+  const [, rawYear, rawMonth, rawDay] = dateMatch
+  const year = Number(rawYear)
+  const month = Number(rawMonth)
+  const day = Number(rawDay)
+  const parsedDate = new Date(year, month - 1, day)
+  if (
+    parsedDate.getFullYear() !== year ||
+    parsedDate.getMonth() !== month - 1 ||
+    parsedDate.getDate() !== day
+  ) {
+    return false
+  }
+
+  const flightDay = Date.UTC(year, month - 1, day)
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  if (flightDay !== today) return flightDay > today
+
+  const flightTime = timeForGrid(flight.Flight_Date) ||
+    laserTimeToInput(String(flight.Flight_Time ?? ''))
+  const timeMatch = flightTime.match(/^(\d{2}):(\d{2})$/)
+  if (!timeMatch) return false
+
+  const flightHour = Number(timeMatch[1])
+  const flightMinute = Number(timeMatch[2])
+  if (flightHour > 23 || flightMinute > 59) return false
+  const flightMinutes = flightHour * 60 + flightMinute
+  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  return flightMinutes > currentMinutes
+}
+
 function dateTimeForLaser(date: unknown, time: unknown): Record<string, string> | '' {
   const dateValue = date && typeof date === 'object' && 'dateStr' in date
     ? date.dateStr
@@ -213,12 +295,14 @@ function flightNumberEditor(
   success: (value: unknown) => boolean,
   cancel: (value: unknown) => void,
   options: Record<string, string>,
+  definitions: Map<string, Record<string, unknown>>,
 ): HTMLInputElement {
   const input = document.createElement('input')
   const datalist = document.createElement('datalist')
   const listId = `flight-options-${crypto.randomUUID()}`
   let completed = false
 
+  refreshFlightAutocompleteOptions(definitions, options)
   datalist.id = listId
   for (const [value, label] of Object.entries(options)) {
     const option = document.createElement('option')
@@ -259,29 +343,26 @@ function flightNumberEditor(
   return input
 }
 
-const REQUEST_STATUS_TRANSITIONS: Record<string, string[]> = {
-  '': ['Requested'],
-  Requested: [''],
-  Arrived: ['Request Return'],
-  'Request Return': ['Arrived'],
+const REQUEST_STATUS_TRANSITIONS: Record<UserRole, Record<string, string[]>> = {
+  Manager: {
+    '': ['Requested'],
+    Requested: [''],
+    Arrived: ['Request Return'],
+    'Request Return': ['Arrived'],
+  },
+  HR: {
+    Requested: ['Flight Booked'],
+    'Flight Booked': ['Requested', 'Arrived', 'Flight Missed', 'Request Return'],
+    'Flight Missed': ['Flight Booked'],
+    'Request Return': ['Flight Booked'],
+  },
 }
 const BOOKED_REQUEST_STATUSES = new Set(['Flight Booked', 'Return Flight Booked'])
 const EMPTY_REQUEST_STATUS_FILTER = '__empty_request_status__'
 const EMPTY_FARM_FILTER = '__empty_farm__'
 
 function allowedRequestStatusTransitions(role: UserRole | null, status: string): string[] {
-  if (role === 'HR') {
-    if (status === 'Requested') return ['Flight Booked']
-    if (status === 'Flight Booked') return ['Requested']
-    if (status === 'Request Return') return ['Return Flight Booked']
-    return []
-  }
-  if (role === 'Manager') {
-    return (REQUEST_STATUS_TRANSITIONS[status] ?? []).filter(
-      (nextStatus) => nextStatus === 'Requested' || nextStatus === 'Request Return',
-    )
-  }
-  return []
+  return role ? REQUEST_STATUS_TRANSITIONS[role][status] ?? [] : []
 }
 
 function isCellEditable(
@@ -403,10 +484,66 @@ function requestStatusEditor(
   return select
 }
 
+function airlineEditor(
+  cell: CellComponent,
+  onRendered: (callback: () => void) => void,
+  success: (value: unknown) => boolean,
+  cancel: (value: unknown) => void,
+): HTMLSelectElement {
+  const currentAirline = String(cell.getValue() ?? '')
+  const select = document.createElement('select')
+  const placeholder = document.createElement('option')
+  let completed = false
+
+  placeholder.value = ''
+  placeholder.textContent = 'Select an airline'
+  select.append(placeholder)
+
+  if (currentAirline && !AIRLINE_OPTIONS.includes(currentAirline)) {
+    const existingOption = document.createElement('option')
+    existingOption.value = currentAirline
+    existingOption.textContent = `${currentAirline} (existing)`
+    select.append(existingOption)
+  }
+
+  for (const airline of AIRLINE_OPTIONS) {
+    const option = document.createElement('option')
+    option.value = airline
+    option.textContent = airline
+    select.append(option)
+  }
+
+  select.value = currentAirline
+  select.style.width = '100%'
+  select.style.height = '100%'
+  select.style.boxSizing = 'border-box'
+
+  const commit = () => {
+    if (completed) return
+    success(select.value)
+    completed = true
+  }
+  const cancelEdit = () => {
+    if (completed) return
+    completed = true
+    cancel(undefined)
+  }
+
+  select.addEventListener('change', commit)
+  select.addEventListener('blur', commit)
+  select.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') commit()
+    if (event.key === 'Escape') cancelEdit()
+  })
+  onRendered(() => select.focus())
+  return select
+}
+
 function requestColumns(
   worksites: string[],
   flightOptions: Record<string, string>,
   role: UserRole,
+  flightDefinitions: Map<string, Record<string, unknown>>,
 ): ColumnDefinition[] {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
@@ -443,6 +580,7 @@ function requestColumns(
         { label: 'Arrived', value: 'Arrived' },
         { label: 'Request Return', value: 'Request Return' },
         { label: 'Flight Booked', value: 'Flight Booked' },
+        { label: 'Flight Missed', value: 'Flight Missed' },
         { label: 'Return Flight Booked', value: 'Return Flight Booked' },
       ]),
       headerFilterFunc: (filterValue, rowValue) =>
@@ -482,9 +620,15 @@ function requestColumns(
       minWidth: 120,
       widthGrow: 1.1,
       editor: (cell, onRendered, success, cancel) =>
-        flightNumberEditor(cell, onRendered, success, cancel, flightOptions),
+        flightNumberEditor(cell, onRendered, success, cancel, flightOptions, flightDefinitions),
     },
-    { title: 'Carrier', field: 'Flight_Carrier', minWidth: 120, widthGrow: 1.3 },
+    {
+      title: 'Airline',
+      field: 'Flight_Carrier',
+      minWidth: 120,
+      widthGrow: 1.3,
+      editor: airlineEditor,
+    },
     { title: 'Origin', field: 'Flight_Origin', minWidth: 90, widthGrow: 0.8 },
     { title: 'Destination', field: 'Flight_Destination', minWidth: 110, widthGrow: 1.0 },
     {
@@ -497,14 +641,6 @@ function requestColumns(
       headerFilterPlaceholder: 'Filter by date',
     },
     { title: 'Flight time', field: 'Flight_Time', minWidth: 82, widthGrow: 0.8, editor: 'time' },
-    {
-      title: 'Flight type',
-      field: 'Flight_Type',
-      minWidth: 100,
-      widthGrow: 0.9,
-      editor: 'list',
-      editorParams: { values: ['Arrival', 'Departure'] },
-    },
   ]
 }
 
@@ -576,15 +712,6 @@ function App() {
       .filter((row): row is RowComponent => Boolean(row))
   }
 
-  function updateFlightDefinition(flightNumber: string, row: EmployeeRow) {
-    if (flightNumber) {
-      flightDefinitions.current.set(flightNumber, {
-        Flight_Number: flightNumber,
-        ...flightDefinition(row),
-      })
-    }
-  }
-
   function clearFlightDefinition(row: RowComponent) {
     row.update({
       Flight_Carrier: '',
@@ -592,7 +719,6 @@ function App() {
       Flight_Destination: '',
       Flight_Date: '',
       Flight_Time: '',
-      Flight_Type: '',
     })
   }
 
@@ -604,7 +730,6 @@ function App() {
       Flight_Destination: '',
       Flight_Date: '',
       Flight_Time: '',
-      Flight_Type: '',
     })
   }
 
@@ -616,7 +741,6 @@ function App() {
       Flight_Date: dateForGrid(definition.Flight_Date),
       Flight_Time: timeForGrid(definition.Flight_Date) ||
         laserTimeToInput(String(definition.Flight_Time ?? '')),
-      Flight_Type: definition.Flight_Type ?? '',
     })
   }
 
@@ -752,11 +876,9 @@ function App() {
           definitions.set(flightNumber, flight)
         }
       }
+
       flightDefinitions.current = definitions
-      for (const key of Object.keys(flightOptions.current)) delete flightOptions.current[key]
-      for (const flightNumber of definitions.keys()) {
-        flightOptions.current[flightNumber] = flightNumber
-      }
+      refreshFlightAutocompleteOptions(definitions, flightOptions.current)
 
       originalRows.current = new Map(
         normalizedRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
@@ -766,7 +888,12 @@ function App() {
       )
       updatedRows.current.clear()
       setChangeCount(0)
-      setColumns(requestColumns(worksites, flightOptions.current, receivedRole))
+      setColumns(requestColumns(
+        worksites,
+        flightOptions.current,
+        receivedRole,
+        flightDefinitions.current,
+      ))
       setRows(normalizedRows)
       setRowCount(normalizedRows.length)
       setReady(true)
@@ -821,11 +948,16 @@ function App() {
           for (const target of affectedRows) clearFlightDefinition(target)
         } else if (definition) {
           for (const target of affectedRows) fillFlightDefinition(target, definition)
+          updateFlightAutocompleteOption(flightNumber, definition, flightOptions.current)
         } else {
           for (const target of affectedRows) clearFlightDefinition(target)
-          updateFlightDefinition(flightNumber, row.getData() as EmployeeRow)
+          updateFlightDefinition(
+            flightNumber,
+            row.getData() as EmployeeRow,
+            flightDefinitions.current,
+            flightOptions.current,
+          )
         }
-        if (flightNumber) flightOptions.current[flightNumber] = flightNumber
         for (const target of affectedRows) trackUpdate(target.getData() as EmployeeRow)
         return
       }
@@ -846,7 +978,12 @@ function App() {
           target.update(updates)
           trackUpdate(target.getData() as EmployeeRow)
         }
-        updateFlightDefinition(flightNumber, rowData)
+        updateFlightDefinition(
+          flightNumber,
+          rowData,
+          flightDefinitions.current,
+          flightOptions.current,
+        )
       }
       trackUpdate(rowData)
     })
@@ -883,9 +1020,9 @@ function App() {
       )
       const isBooked = BOOKED_REQUEST_STATUSES.has(String(row.Request_Status ?? ''))
       return !row.Employee_Number ||
-        (isBooked && (!row.Flight_Number || !['Arrival', 'Departure'].includes(String(row.Flight_Type)))) ||
+        (isBooked && !row.Flight_Number) ||
         (flightChanged && !flightIsBlank &&
-          (!row.Flight_Number || !['Arrival', 'Departure'].includes(String(row.Flight_Type))))
+          !row.Flight_Number)
     })
     if (invalidRows.length) {
       setSaveNotice('Choose an existing flight number or enter a flight number and type before saving.')
@@ -909,7 +1046,6 @@ function App() {
           Flight_Origin: '',
           Flight_Destination: '',
           Flight_DateTime: '',
-          Flight_Type: '',
           PhoneNumber: worker.PhoneNumber,
           Email: worker.Email,
         })),
@@ -1040,31 +1176,25 @@ function App() {
         'Arrived',
         'Request Return',
         'Flight Booked',
-        'Return Flight Booked',
+        'Flight Missed',
       ][index % 6]
-      const flightType = status === 'Request Return' || status === 'Return Flight Booked'
-        ? 'Departure'
-        : 'Arrival'
       const hasFlight = BOOKED_REQUEST_STATUSES.has(status)
       const day = String((index % 27) + 1).padStart(2, '0')
-      const flightDay = String(
-        (flightType === 'Arrival' ? 20 : 10) + (index % 4),
-      ).padStart(2, '0')
+      const flightDay = String(20 + (index % 8)).padStart(2, '0')
       return {
         Employee_Number: employee.Employee_Number,
         Request_Status: status,
         Farm: status ? worksites[index % worksites.length] : '',
         Requested_Arrival: status ? { dateStr: `2026-12-${day}` } : '',
         Flight_Number: hasFlight
-          ? `LF${flightType === 'Arrival' ? 420 : 430}${index % 4}`
+          ? `LF${420 + (index % 8)}`
           : '',
-        Flight_Carrier: hasFlight ? 'Northstar Air' : '',
+        Flight_Carrier: hasFlight ? 'Air Canada' : '',
         Flight_Origin: hasFlight ? 'YVR' : '',
         Flight_Destination: hasFlight ? 'YYZ' : '',
         Flight_Date: hasFlight
           ? { dateStr: `2026-12-${flightDay}`, timeStr: '08:30:00 AM' }
           : '',
-        Flight_Type: hasFlight ? flightType : '',
       }
     })
     const sampleRows = buildRequestRows(employees, flights)
@@ -1074,10 +1204,7 @@ function App() {
         flight,
       ]),
     )
-    for (const key of Object.keys(flightOptions.current)) delete flightOptions.current[key]
-    for (const flightNumber of flightDefinitions.current.keys()) {
-      flightOptions.current[flightNumber] = flightNumber
-    }
+    refreshFlightAutocompleteOptions(flightDefinitions.current, flightOptions.current)
     originalRows.current = new Map(
       sampleRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
     )
@@ -1086,7 +1213,12 @@ function App() {
     )
     updatedRows.current.clear()
     setChangeCount(0)
-    setColumns(requestColumns(worksites, flightOptions.current, 'HR'))
+    setColumns(requestColumns(
+      worksites,
+      flightOptions.current,
+      'HR',
+      flightDefinitions.current,
+    ))
     setRows(sampleRows)
     setRowCount(sampleRows.length)
     setReady(true)
@@ -1222,18 +1354,17 @@ function App() {
                 <div className="worker-list-wrap">
                   <table className="worker-list">
                     <thead>
-                      <tr><th>Temporary employee #</th><th>Farm</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th>Save status</th><th><span className="sr-only">Actions</span></th></tr>
+                      <tr><th>Farm</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th>Save status</th><th><span className="sr-only">Actions</span></th></tr>
                     </thead>
                     <tbody>
-                      {temporaryWorkers.map((worker) => (
+                      {temporaryWorkers.map((worker, index) => (
                         <tr key={worker.__lfRowId}>
-                          <td>{worker.Employee_Number}</td>
                           <td>{worker.Farm}</td>
-                          <td><input aria-label={`Name for temporary employee ${worker.Employee_Number}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving || worker.Saved} /></td>
-                          <td><input aria-label={`Phone number for temporary employee ${worker.Employee_Number}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving || worker.Saved} /></td>
-                          <td><input aria-label={`Email for temporary employee ${worker.Employee_Number}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td><input aria-label={`Name for new worker request ${index + 1}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td><input aria-label={`Phone number for new worker request ${index + 1}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td><input aria-label={`Email for new worker request ${index + 1}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving || worker.Saved} /></td>
                           <td>{worker.Saved ? 'Saved' : 'Pending'}</td>
-                          <td><button className="remove-worker" type="button" onClick={() => removeTemporaryWorker(worker.__lfRowId)} disabled={saving} aria-label={`Remove temporary employee ${worker.Employee_Number}`}>Remove</button></td>
+                          <td><button className="remove-worker" type="button" onClick={() => removeTemporaryWorker(worker.__lfRowId)} disabled={saving} aria-label={`Remove new worker request ${index + 1}`}>Remove</button></td>
                         </tr>
                       ))}
                     </tbody>
