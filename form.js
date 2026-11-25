@@ -129,15 +129,72 @@ async function setSubmissionStatus(allowed) {
   }
 }
 
-LFForm.onFormSubmission(() => {
+function verifyTabulatorSubmissionState() {
+  const targetWindow = tabulatorWindow;
+  if (!targetWindow) return Promise.resolve({ allowed: true });
+
+  return new Promise((resolve) => {
+    let timeoutId;
+    const finish = (result) => {
+      window.removeEventListener("message", handleMessage);
+      clearTimeout(timeoutId);
+      resolve(result);
+    };
+    const handleMessage = (event) => {
+      if (event.origin !== TABULATOR_ORIGIN || event.source !== targetWindow) {
+        return;
+      }
+      if (event.data?.type === "employee-tabulator:submission-ready") {
+        finish({ allowed: true });
+      } else if (event.data?.type === "employee-tabulator:submission-blocked") {
+        finish({
+          allowed: false,
+          message: String(event.data.message || "Save pending employee request changes before submitting."),
+        });
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    timeoutId = window.setTimeout(() => {
+      console.error("[LF bridge] timed out checking employee request changes before submission");
+      finish({
+        allowed: false,
+        message: "Could not verify employee request changes. Wait for the employee page to respond, then submit again.",
+      });
+    }, 2000);
+
+    try {
+      targetWindow.postMessage(
+        { type: "employee-tabulator:submission-check" },
+        TABULATOR_ORIGIN,
+      );
+    } catch (error) {
+      console.error("[LF bridge] could not check employee request changes before submission", error);
+      finish({
+        allowed: false,
+        message: "Could not verify employee request changes. Reload the employee page, then submit again.",
+      });
+    }
+  });
+}
+
+LFForm.onFormSubmission(async () => {
+  let submissionAllowed = false;
   try {
-    if (!submissionBlocked && isSubmitStatusTrue()) return;
+    submissionAllowed = !submissionBlocked && isSubmitStatusTrue();
   } catch (error) {
     console.error("[LF bridge] could not verify submission status", error);
   }
-  return {
-    error: "Employee request data has not finished saving. Wait for the save to complete before submitting.",
-  };
+  if (!submissionAllowed) {
+    return {
+      error: "Employee request data has not finished saving. Wait for the save to complete before submitting.",
+    };
+  }
+
+  const tabulatorState = await verifyTabulatorSubmissionState();
+  if (!tabulatorState.allowed) {
+    return { error: tabulatorState.message };
+  }
 });
 
 console.info("[LF bridge] script started", {

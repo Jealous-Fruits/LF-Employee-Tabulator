@@ -516,6 +516,8 @@ function App() {
   const savingRef = useRef(false)
   const pendingOperation = useRef<PendingOperation | null>(null)
   const previewMode = useRef(false)
+  const pendingChangeCountRef = useRef(0)
+  const hasUnsubmittedFormChangesRef = useRef(false)
   const role = useRef<UserRole | null>(null)
   const flightDefinitions = useRef(new Map<string, Record<string, unknown>>())
   const flightOptions = useRef<Record<string, string>>({})
@@ -525,6 +527,7 @@ function App() {
   const [columns, setColumns] = useState<ColumnDefinition[]>([])
   const [rows, setRows] = useState<EmployeeRow[]>([])
   const [worksites, setWorksites] = useState<string[]>([])
+  const [previewModeActive, setPreviewModeActive] = useState(false)
   const [activeTab, setActiveTab] = useState<PageTab>('employee-requests')
   const [temporaryWorkers, setTemporaryWorkers] = useState<TemporaryWorkerRow[]>([])
   const [workerFarm, setWorkerFarm] = useState('')
@@ -536,11 +539,17 @@ function App() {
   const [rowCount, setRowCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState('')
+  const [hasUnsubmittedFormChanges, setHasUnsubmittedFormChanges] = useState(false)
 
   function setSavingState(value: boolean) {
     savingRef.current = value
     setSaving(value)
     table.current?.redraw(true)
+  }
+
+  function setFormChangesAwaitingSubmission(value: boolean) {
+    hasUnsubmittedFormChangesRef.current = value
+    setHasUnsubmittedFormChanges(value)
   }
 
   function trackUpdate(row: EmployeeRow) {
@@ -616,12 +625,27 @@ function App() {
       const data = event.data
       if (event.origin !== LF_SANDBOX_ORIGIN) return
 
+      if (data?.type === 'employee-tabulator:submission-check') {
+        if (event.source !== formWindow.current) return
+        const canSubmit = pendingChangeCountRef.current === 0 && !savingRef.current
+        if (canSubmit) setFormChangesAwaitingSubmission(false)
+        ;(event.source as Window).postMessage(
+          canSubmit
+            ? { type: 'employee-tabulator:submission-ready' }
+            : {
+                type: 'employee-tabulator:submission-blocked',
+                message: 'Save or remove the pending employee request changes before submitting the form.',
+              },
+          LF_SANDBOX_ORIGIN,
+        )
+        return
+      }
+
       if (data?.type === 'employee-request:saved') {
         if (event.source !== formWindow.current) return
         const operation = pendingOperation.current
         if (operation?.kind !== 'save') return
         setSavingState(false)
-        const rowsSaved = Number(data.rowsSaved) || 0
         for (const row of operation.employeeRows) {
           originalRows.current.set(row.__lfRowId, requestSnapshot(row))
           originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
@@ -634,7 +658,8 @@ function App() {
         )
         pendingOperation.current = null
         setChangeCount(updatedRows.current.size)
-        setSaveNotice(`${rowsSaved} pending request row(s) saved. Saved worker requests remain available to remove.`)
+        setFormChangesAwaitingSubmission(true)
+        setSaveNotice('Saved to the Laserfiche form, not submitted. Submit the form to finalize these changes.')
         return
       }
 
@@ -647,7 +672,8 @@ function App() {
           current.filter((worker) => worker.__lfRowId !== operation.workerRowId),
         )
         pendingOperation.current = null
-        setSaveNotice('Saved worker request removed.')
+        setFormChangesAwaitingSubmission(true)
+        setSaveNotice('Saved worker request removed from the form. Submit the form to finalize your changes.')
         return
       }
 
@@ -710,6 +736,7 @@ function App() {
 
       role.current = receivedRole
       previewMode.current = false
+      setPreviewModeActive(false)
       const worksites = [...new Set(worksiteValues.map((worksite) => {
         if (typeof worksite === 'string') return worksite
         if (!worksite || typeof worksite !== 'object') return ''
@@ -1002,6 +1029,7 @@ function App() {
       Status: ['Active', 'Terminated', 'Active', 'Active'][index % 4],
     }))
     previewMode.current = true
+    setPreviewModeActive(true)
     role.current = 'HR'
     const worksites = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
     setWorksites(worksites)
@@ -1067,6 +1095,30 @@ function App() {
 
   const unsavedWorkerCount = temporaryWorkers.filter((worker) => !worker.Saved).length
   const pendingChangeCount = changeCount + unsavedWorkerCount
+  const shouldWarnBeforeUnload = ready && !previewModeActive &&
+    (pendingChangeCount > 0 || saving || hasUnsubmittedFormChanges)
+
+  useEffect(() => {
+    pendingChangeCountRef.current = pendingChangeCount
+  }, [pendingChangeCount])
+
+  useEffect(() => {
+    if (!shouldWarnBeforeUnload) return
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (previewModeActive ||
+        (pendingChangeCountRef.current === 0 &&
+          !savingRef.current &&
+          !hasUnsubmittedFormChangesRef.current)) {
+        return
+      }
+      event.preventDefault()
+      event.returnValue = ' '
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [previewModeActive, shouldWarnBeforeUnload])
 
   return (
     <main className="workspace">
