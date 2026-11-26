@@ -385,16 +385,17 @@ function isCellEditable(
   if (!columnEditable) return false
   const requestStatus = String(rowData.Request_Status ?? '').trim()
   const isBooked = BOOKED_REQUEST_STATUSES.has(requestStatus)
+  const isFlightDefinitionField = (FLIGHT_DEFINITION_FIELDS as readonly string[]).includes(field)
+  if (isFlightDefinitionField && !String(rowData.Flight_Number ?? '').trim()) {
+    return false
+  }
   if (field === 'Request_Status') {
     return allowedRequestStatusTransitions(role, requestStatus).length > 0
   }
   if (role === 'HR' && field === 'Flight_Number') {
     return isBooked
   }
-  if (
-    role === 'HR' &&
-    (FLIGHT_DEFINITION_FIELDS as readonly string[]).includes(field)
-  ) {
+  if (role === 'HR' && isFlightDefinitionField) {
     return isBooked
   }
   if (role !== 'Manager') return false
@@ -573,7 +574,7 @@ function requestColumns(
     { title: 'Employee number', field: 'Employee_Number', minWidth: 112, widthGrow: 1.1, editable: false },
     { title: 'Full name', field: 'FullName', minWidth: 150, widthGrow: 1.5, editable: false },
     {
-      title: 'Current status',
+      title: 'Status',
       field: 'Status',
       minWidth: 100,
       widthGrow: 0.9,
@@ -584,7 +585,7 @@ function requestColumns(
       ]),
     },
     {
-      title: 'Request status',
+      title: 'Request',
       field: 'Request_Status',
       minWidth: 135,
       widthGrow: 1.1,

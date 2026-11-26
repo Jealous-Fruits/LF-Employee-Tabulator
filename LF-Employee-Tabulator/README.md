@@ -42,7 +42,9 @@ Only `HR` and `Manager` are recognized roles. An absent or unknown role leaves t
 | HR | Flight Missed | Flight Booked |
 | HR | Request Return | Flight Booked |
 
-Farm and requested date are editable for eligible Manager statuses other than Blank, `Arrived`, and booked statuses. Flight fields are editable for HR only in booked statuses. The legacy `Return Flight Booked` status remains available for existing records, but is not offered as a transition. Preferred arrival/departure dates are constrained to tomorrow or later.
+Farm and requested date are editable for eligible Manager statuses other than Blank, `Arrived`, and booked statuses. Flight fields are editable for HR only in booked statuses; carrier, route, date, and time remain locked until a flight number is entered. The legacy `Return Flight Booked` status remains available for existing records, but is not offered as a transition. Preferred arrival/departure dates are constrained to tomorrow or later.
+
+The employee grid labels the employee's existing status as **Status** and the request workflow status as **Request**.
 
 The hosted iframe is already embedded in the form. The LFForm sandbox sends `employee-tabulator:hello` to child frames using the exact hosted origin as `targetOrigin`, retrying for up to 60 seconds. The hosted page accepts messages only from `https://sandbox-forms.laserfiche.ca`, replies to the hello sender with `employee-tabulator:ready`, then accepts init and save acknowledgements only from that same sandbox window. Messages back to Laserfiche target the sandbox origin; the page does not use `window.parent` as the data channel.
 
