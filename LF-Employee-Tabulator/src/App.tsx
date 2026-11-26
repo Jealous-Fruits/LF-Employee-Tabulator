@@ -1435,7 +1435,7 @@ function App() {
           ? `${changeCount} employee change${changeCount === 1 ? '' : 's'} and ${unsavedWorkerCount} new worker request${unsavedWorkerCount === 1 ? '' : 's'} ready to save`
           : 'No changes to send yet')}</span>
         <button className="button button-save" type="button" onClick={saveChanges} disabled={!ready || pendingChangeCount === 0 || saving}>
-          {saving ? 'Saving changes...' : 'Save all changes'} <span aria-hidden="true">↗</span>
+          {saving ? 'Saving changes...' : 'Save for Review'} <span aria-hidden="true">↗</span>
         </button>
       </div>
     </main>
