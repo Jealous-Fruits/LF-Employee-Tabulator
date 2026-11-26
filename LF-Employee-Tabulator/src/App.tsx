@@ -4,6 +4,7 @@ import type { CellComponent, ColumnDefinition, RowComponent } from 'tabulator-ta
 import 'tabulator-tables/dist/css/tabulator.min.css'
 import './App.css'
 
+// Shared data shapes for the employee grid, temporary-worker requests, and form bridge.
 type EmployeeRow = Record<string, unknown> & {
   __lfRowId: string
 }
@@ -41,6 +42,7 @@ type PendingOperation =
   | { kind: 'save'; employeeRows: RequestRow[]; workerRowIds: string[] }
   | { kind: 'remove-worker'; workerRowId: string }
 
+// Form fields, airline choices, and limits used across the request workflows.
 const FLIGHT_FIELDS = [
   'Flight_Number',
   'Flight_Carrier',
@@ -61,6 +63,7 @@ const AIRLINE_OPTIONS = [
 const MAX_WORKERS_PER_ADD = 1000
 const LF_SANDBOX_ORIGIN = 'https://sandbox-forms.laserfiche.ca'
 
+// Snapshots provide stable comparisons for flight-wide and per-request edits.
 function flightSnapshot(row: EmployeeRow): string {
   return JSON.stringify(FLIGHT_FIELDS.map((field) => row[field] ?? ''))
 }
@@ -79,6 +82,7 @@ function requestSnapshot(row: EmployeeRow): string {
   return JSON.stringify(REQUEST_FIELDS.map((field) => row[field] ?? ''))
 }
 
+// Normalize employee and flight table records into rows displayed by Tabulator.
 function buildRequestRows(
   employees: Record<string, unknown>[],
   flights: Record<string, unknown>[] = [],
@@ -141,6 +145,7 @@ function buildRequestRows(
   })
 }
 
+// Convert a displayed row into the payload expected by the Laserfiche form bridge.
 function toRequestPayload(row: RequestRow): Record<string, unknown> {
   return {
     Employee_Number: row.Employee_Number,
@@ -158,6 +163,7 @@ function toRequestPayload(row: RequestRow): Record<string, unknown> {
   }
 }
 
+// Keep reusable flight definitions and future-flight autocomplete options in sync.
 function flightDefinition(row: EmployeeRow): Record<string, unknown> {
   return Object.fromEntries(
     FLIGHT_DEFINITION_FIELDS.map((field) => [field, row[field] ?? '']),
@@ -204,6 +210,7 @@ function updateFlightDefinition(
   updateFlightAutocompleteOption(flightNumber, definition, options)
 }
 
+// Convert dates and times between LFForm values and native grid editor formats.
 function laserTimeToInput(value: string): string {
   const match = value.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i)
   if (!match) return value.slice(0, 5)
@@ -238,6 +245,7 @@ function timeForGrid(value: unknown): string {
   return ''
 }
 
+// Only future flights, or flights later today, are offered for autocomplete.
 function flightHasNotHappened(flight: Record<string, unknown>, now = new Date()): boolean {
   const dateMatch = dateForGrid(flight.Flight_Date).match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!dateMatch) return false
@@ -272,6 +280,7 @@ function flightHasNotHappened(flight: Record<string, unknown>, now = new Date())
   return flightMinutes > currentMinutes
 }
 
+// Shape grid date/time values for the form's DateTime field.
 function dateTimeForLaser(date: unknown, time: unknown): Record<string, string> | '' {
   const dateValue = date && typeof date === 'object' && 'dateStr' in date
     ? date.dateStr
@@ -289,6 +298,7 @@ function dateTimeForLaser(date: unknown, time: unknown): Record<string, string> 
   }
 }
 
+// Build a text editor with datalist suggestions for known future flight numbers.
 function flightNumberEditor(
   cell: CellComponent,
   onRendered: (callback: () => void) => void,
@@ -343,6 +353,7 @@ function flightNumberEditor(
   return input
 }
 
+// Centralize role-based status transitions and determine which cells each role may edit.
 const REQUEST_STATUS_TRANSITIONS: Record<UserRole, Record<string, string[]>> = {
   Manager: {
     '': ['Requested'],
@@ -395,6 +406,7 @@ function isCellEditable(
   return false
 }
 
+// Reflect role-based edit permissions in the grid's editable-cell styling.
 function updateEditableCellStyles(
   row: RowComponent,
   role: UserRole | null,
@@ -410,6 +422,7 @@ function updateEditableCellStyles(
   }
 }
 
+// Reusable select controls for table filters and editable request fields.
 function headerSelectFilter(options: { label: string; value: string }[]) {
   return (
     cell: CellComponent,
@@ -436,6 +449,7 @@ function headerSelectFilter(options: { label: string; value: string }[]) {
   }
 }
 
+// Offer the current status and only the transitions permitted for the active role.
 function requestStatusEditor(
   cell: CellComponent,
   onRendered: (callback: () => void) => void,
@@ -484,6 +498,7 @@ function requestStatusEditor(
   return select
 }
 
+// Restrict airline edits to the supported choices while preserving legacy values.
 function airlineEditor(
   cell: CellComponent,
   onRendered: (callback: () => void) => void,
@@ -539,6 +554,7 @@ function airlineEditor(
   return select
 }
 
+// Configure employee-grid columns, editors, filters, and date constraints.
 function requestColumns(
   worksites: string[],
   flightOptions: Record<string, string>,
@@ -644,7 +660,9 @@ function requestColumns(
   ]
 }
 
+// Own the form connection, grid lifecycle, pending changes, and request workflows.
 function App() {
+  // Refs hold integration bookkeeping; state values drive the rendered interface.
   const tableElement = useRef<HTMLDivElement>(null)
   const table = useRef<Tabulator | null>(null)
   const formWindow = useRef<Window | null>(null)
@@ -677,6 +695,7 @@ function App() {
   const [saveNotice, setSaveNotice] = useState('')
   const [hasUnsubmittedFormChanges, setHasUnsubmittedFormChanges] = useState(false)
 
+  // Keep mutable save state synchronized with the rendered controls and grid.
   function setSavingState(value: boolean) {
     savingRef.current = value
     setSaving(value)
@@ -688,6 +707,7 @@ function App() {
     setHasUnsubmittedFormChanges(value)
   }
 
+  // Track changed rows and find or update every row sharing a flight number.
   function trackUpdate(row: EmployeeRow) {
     const original = originalRows.current.get(row.__lfRowId)
     const snapshot = requestSnapshot(row)
@@ -712,6 +732,7 @@ function App() {
       .filter((row): row is RowComponent => Boolean(row))
   }
 
+  // Clear, assign, or fill flight data consistently across employee rows.
   function clearFlightDefinition(row: RowComponent) {
     row.update({
       Flight_Carrier: '',
@@ -744,11 +765,13 @@ function App() {
     })
   }
 
+  // Receive form messages, enforce the submission handshake, and initialize requests.
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data
       if (event.origin !== LF_SANDBOX_ORIGIN) return
 
+      // Allow form submission only when no page edits or saves are pending.
       if (data?.type === 'employee-tabulator:submission-check') {
         if (event.source !== formWindow.current) return
         const canSubmit = pendingChangeCountRef.current === 0 && !savingRef.current
@@ -765,6 +788,7 @@ function App() {
         return
       }
 
+      // Finalize the matching save operation and update the local save baseline.
       if (data?.type === 'employee-request:saved') {
         if (event.source !== formWindow.current) return
         const operation = pendingOperation.current
@@ -787,6 +811,7 @@ function App() {
         return
       }
 
+      // Remove a saved temporary-worker row after the form confirms deletion.
       if (data?.type === 'employee-request:workers-removed') {
         if (event.source !== formWindow.current) return
         const operation = pendingOperation.current
@@ -801,6 +826,7 @@ function App() {
         return
       }
 
+      // Keep failed employee changes pending and surface the form's error.
       if (data?.type === 'employee-request:save-error') {
         if (event.source !== formWindow.current) return
         const operation = pendingOperation.current
@@ -816,6 +842,7 @@ function App() {
         return
       }
 
+      // Complete the initialization handshake with the embedding form.
       if (data?.type === 'employee-tabulator:hello') {
         if (event.source) {
           formWindow.current = event.source as Window
@@ -839,6 +866,7 @@ function App() {
           Role?: unknown
         }
       }
+      // Validate and normalize the initial form payload before enabling the grid.
       const employeeRows = payload.data?.employees
       const receivedRole = payload.data?.Role
       if (receivedRole !== 'HR' && receivedRole !== 'Manager') {
@@ -904,6 +932,7 @@ function App() {
     return () => window.removeEventListener('message', handleMessage)
   }, [])
 
+  // Create the employee grid and propagate edits to all instances of a flight.
   useEffect(() => {
     if (!ready || activeTab !== 'employee-requests' || !tableElement.current) return
 
@@ -940,6 +969,7 @@ function App() {
     grid.on('cellEdited', (cell: CellComponent) => {
       const row = cell.getRow()
       const field = String(cell.getField())
+      // Resolve an entered flight number or clear its details for manual entry.
       if (field === 'Flight_Number') {
         const flightNumber = String(cell.getValue() ?? '')
         const definition = flightDefinitions.current.get(flightNumber)
@@ -962,6 +992,7 @@ function App() {
         return
       }
 
+      // Returning an HR request to Requested removes its previous flight assignment.
       if (
         field === 'Request_Status' &&
         role.current === 'HR' &&
@@ -972,6 +1003,7 @@ function App() {
 
       const rowData = row.getData() as EmployeeRow
       const flightNumber = String(rowData.Flight_Number ?? '')
+      // Keep the shared flight definition and all rows using it synchronized.
       if (flightNumber && (FLIGHT_DEFINITION_FIELDS as readonly string[]).includes(field)) {
         const updates = { [field]: rowData[field] }
         for (const target of matchingFlightRows(flightNumber, rowData.__lfRowId)) {
@@ -999,9 +1031,11 @@ function App() {
     }
   }, [activeTab, columns, ready, rows])
 
+  // Validate pending changes and save employee and temporary-worker requests together.
   function saveChanges() {
     if (savingRef.current) return
 
+    // Drop stale dirty entries and compare the remaining rows with their baselines.
     const changedRows = [...updatedRows.current.values()].filter((row) => {
       const original = originalRows.current.get(row.__lfRowId)
       return original === undefined || original !== requestSnapshot(row)
@@ -1013,6 +1047,7 @@ function App() {
     }
     setChangeCount(changedRows.length)
 
+    // Prevent incomplete booked-flight assignments from being sent to the form.
     const invalidRows = changedRows.filter((row) => {
       const flightChanged = originalFlightRows.current.get(row.__lfRowId) !== flightSnapshot(row)
       const flightIsBlank = FLIGHT_FIELDS.every(
@@ -1053,6 +1088,7 @@ function App() {
     }
     if (payload.requests.length === 0) return
 
+    // Preview saves update local baselines without sending messages to Laserfiche.
     if (previewMode.current) {
       for (const row of changedRows) {
         originalRows.current.set(row.__lfRowId, requestSnapshot(row))
@@ -1085,6 +1121,7 @@ function App() {
     formWindow.current.postMessage(payload, LF_SANDBOX_ORIGIN)
   }
 
+  // Validate bulk-add input and create the requested worker rows for one farm.
   function addTemporaryWorkers() {
     const count = Number(workerCount)
     if (!workerFarm) {
@@ -1115,6 +1152,7 @@ function App() {
     setSaveNotice('')
   }
 
+  // Update the optional identity and contact fields for a new worker request.
   function updateTemporaryWorker(
     rowId: string,
     field: 'FullName' | 'PhoneNumber' | 'Email',
@@ -1128,6 +1166,7 @@ function App() {
     setSaveNotice('')
   }
 
+  // Remove unsaved rows locally or request removal of saved rows through the form.
   function removeTemporaryWorker(rowId: string) {
     if (savingRef.current) return
     const worker = temporaryWorkers.find((entry) => entry.__lfRowId === rowId)
@@ -1158,6 +1197,7 @@ function App() {
     )
   }
 
+  // Load deterministic sample records for previewing the employee request grid.
   function loadSample() {
     const employees = Array.from({ length: 3000 }, (_, index) => ({
       Employee_Number: `LF-${String(index + 1).padStart(4, '0')}`,
@@ -1225,15 +1265,18 @@ function App() {
     setMessage('')
   }
 
+  // Derive pending-save state and warn before leaving with unsubmitted form changes.
   const unsavedWorkerCount = temporaryWorkers.filter((worker) => !worker.Saved).length
   const pendingChangeCount = changeCount + unsavedWorkerCount
   const shouldWarnBeforeUnload = ready && !previewModeActive &&
     (pendingChangeCount > 0 || saving || hasUnsubmittedFormChanges)
 
+  // Keep the latest pending count available to the browser unload handler.
   useEffect(() => {
     pendingChangeCountRef.current = pendingChangeCount
   }, [pendingChangeCount])
 
+  // Ask the browser to confirm refresh or close while changes await form submission.
   useEffect(() => {
     if (!shouldWarnBeforeUnload) return
 
@@ -1252,8 +1295,10 @@ function App() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [previewModeActive, shouldWarnBeforeUnload])
 
+  // Render the request heading, workflow tabs, active panel, and shared save controls.
   return (
     <main className="workspace">
+      {/* Page identity and record count for the selected workflow. */}
       <section className="page-heading">
         <div>
           <p className="eyebrow">PEOPLE OPERATIONS <span>/</span> EMPLOYEE REQUESTS</p>
@@ -1263,6 +1308,7 @@ function App() {
         <div className="record-total"><strong>{activeTab === 'employee-requests' ? rowCount.toLocaleString() : temporaryWorkers.length.toLocaleString()}</strong><span>{activeTab === 'employee-requests' ? 'records' : 'requested workers'}</span></div>
       </section>
 
+      {/* Switch between standard employee requests and additional-worker requests. */}
       <nav className="page-tabs" role="tablist" aria-label="Request type">
         <button
           id="employee-requests-tab"
@@ -1288,12 +1334,14 @@ function App() {
         </button>
       </nav>
 
+      {/* Show the selected workflow and its corresponding request data. */}
       <section
         className="table-section"
         aria-label={activeTab === 'employee-requests' ? 'Employee records' : 'Additional worker requests'}
       >
         {activeTab === 'employee-requests' ? (
           <div id="employee-requests-panel" role="tabpanel" aria-labelledby="employee-requests-tab">
+            {/* Employee table, loading/preview state, and employee-change count. */}
         <div className="table-toolbar">
           <div className="table-title"><span className="section-index">01</span><h2>Employee hiring and flight requests</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
         </div>
@@ -1316,6 +1364,7 @@ function App() {
           </div>
         ) : (
           <div id="additional-workers-panel" role="tabpanel" aria-labelledby="additional-workers-tab">
+            {/* Controls and editable list for workers requested beyond current employees. */}
             <div className="table-toolbar">
               <div className="table-title"><span className="section-index">02</span><h2>Request additional workers</h2><span className="count-chip">{temporaryWorkers.length}</span></div>
             </div>
@@ -1380,6 +1429,7 @@ function App() {
         )}
       </section>
 
+      {/* Save all pending edits and show their current save/submission status. */}
       <div className="save-bar">
         <span>{saveNotice || (pendingChangeCount
           ? `${changeCount} employee change${changeCount === 1 ? '' : 's'} and ${unsavedWorkerCount} new worker request${unsavedWorkerCount === 1 ? '' : 's'} ready to save`
