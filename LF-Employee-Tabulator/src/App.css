@@ -177,6 +177,7 @@
 .page-tab:focus-visible,
 .remove-worker:focus-visible,
 .worker-list input:focus-visible,
+.worker-list select:focus-visible,
 .worker-request-controls input:focus-visible,
 .worker-request-controls select:focus-visible {
   outline: 2px solid var(--coral);
@@ -387,7 +388,8 @@
 
 .worker-request-controls input,
 .worker-request-controls select,
-.worker-list input {
+.worker-list input,
+.worker-list select {
   width: 100%;
   min-height: 35px;
   border: 1px solid #d5ded8;
@@ -651,7 +653,7 @@
   }
 
   .worker-list {
-    min-width: 700px;
+    min-width: 820px;
   }
 
   .page-tab {

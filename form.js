@@ -1,6 +1,10 @@
 const FIELD_IDS = Object.freeze({
   employeeTable: 93,
   employeeTableReady: 97,
+  employeePii: 123,
+  employeePiiReady: 128,
+  employeeWorkprograms: 124,
+  employeeWorkprogramsReady: 129,
   flight: {
     employeeNumber: 100,
     number: 101,
@@ -99,6 +103,8 @@ const SAVE_SUMMARY_FIELD = Object.freeze({ fieldId: 122 });
 let tabulatorWindow = null;
 let helloTimer = null;
 let employeeTableReady = false;
+let employeePiiReady = false;
+let employeeWorkprogramsReady = false;
 let flightLookupReady = false;
 let farmTableReady = false;
 let roleReady = false;
@@ -238,10 +244,100 @@ function readEmployeeRows() {
     fieldId: FIELD_IDS.employeeTable,
   });
   return toTabulatorData(employeeTable).rows.map((row) => ({
-    Employee_Number: row.Employee_Number ?? row.EmployeeNumber ?? "",
+    Employee_Number: tableValue(row, [
+      "Employee_Number",
+      "EmployeeNumber",
+      "employeenumber",
+      "employeeNumber",
+      "Employee Number",
+    ]),
     FullName: row.FullName ?? "",
     Status: row.Status ?? "",
   }));
+}
+
+function tableValue(row, names) {
+  for (const name of names) {
+    if (!Object.hasOwn(row, name)) continue;
+    const value = row[name];
+    if (value != null && String(value).trim()) return value;
+  }
+  return "";
+}
+
+function normalizeEmployeeNumber(value) {
+  return String(value ?? "").trim();
+}
+
+function readEmployeePiiRows() {
+  const rawValues = LFForm.getFieldValues({ fieldId: FIELD_IDS.employeePii });
+  console.info("[LF bridge] raw Employee PII table values", rawValues);
+  const rows = toTabulatorData(rawValues).rows;
+  return rows.map((row) => ({
+    Employee_Number: tableValue(row, [
+      "Employee_Number",
+      "EmployeeNumber",
+      "employeenumber",
+      "employeeNumber",
+      "Employee Number",
+    ]),
+    Birthdate: tableValue(row, [
+      "Birthdate",
+      "BirthDate",
+      "birthdate",
+      "Birth date",
+      "Birth_Date",
+    ]),
+  }));
+}
+
+function readEmployeeWorkprogramRows() {
+  const rawValues = LFForm.getFieldValues({
+    fieldId: FIELD_IDS.employeeWorkprograms,
+  });
+  console.info("[LF bridge] raw Employee Workprograms table values", rawValues);
+  const rows = toTabulatorData(rawValues).rows;
+  return rows.map((row) => ({
+    Employee_Number: tableValue(row, [
+      "Employee_Number",
+      "EmployeeNumber",
+      "employeenumber",
+      "employeeNumber",
+      "Employee Number",
+    ]),
+    Workprogram: tableValue(row, [
+      "Workprogram",
+      "WorkProgram",
+      "workprogram",
+      "Work Program",
+    ]),
+  }));
+}
+
+function joinEmployeeDetails(employees) {
+  const birthdatesByEmployee = new Map();
+  for (const row of readEmployeePiiRows()) {
+    const employeeNumber = normalizeEmployeeNumber(row.Employee_Number);
+    if (employeeNumber) {
+      birthdatesByEmployee.set(employeeNumber, row.Birthdate);
+    }
+  }
+
+  const workprogramsByEmployee = new Map();
+  for (const row of readEmployeeWorkprogramRows()) {
+    const employeeNumber = normalizeEmployeeNumber(row.Employee_Number);
+    if (!employeeNumber || !String(row.Workprogram ?? "").trim()) continue;
+    workprogramsByEmployee.set(employeeNumber, row.Workprogram);
+  }
+
+  return employees.map((employee) => {
+    const employeeNumber = normalizeEmployeeNumber(employee.Employee_Number);
+    return {
+      ...employee,
+      Birthdate: birthdatesByEmployee.get(employeeNumber) ?? "",
+      Workprogram: workprogramsByEmployee.get(employeeNumber) ?? "",
+    };
+  });
 }
 
 function readUserRole() {
@@ -279,7 +375,7 @@ function buildEmployeeRequestPayload() {
     ),
   ];
 
-  const employees = readEmployeeRows();
+  const employees = joinEmployeeDetails(readEmployeeRows());
   return {
     type: "employee-tabulator:init",
     data: {
@@ -295,6 +391,8 @@ function sendDataToTabulator() {
   if (
     !tabulatorWindow ||
     !employeeTableReady ||
+    !employeePiiReady ||
+    !employeeWorkprogramsReady ||
     !flightLookupReady ||
     !farmTableReady ||
     initialDataSent
@@ -306,6 +404,10 @@ function sendDataToTabulator() {
   if (!payload.data.Role && !roleReady) return;
   tabulatorWindow.postMessage(payload, TABULATOR_ORIGIN);
   initialDataSent = true;
+  console.info(
+    "[LF bridge] joined employee records sent to table (first 5)",
+    payload.data.employees.slice(0, 5),
+  );
   console.info("[LF bridge] unified init sent", {
     employees: payload.data.employees.length,
     worksites: payload.data.worksites.length,
@@ -755,6 +857,28 @@ LFForm.onFieldChange(
     sendDataToTabulator();
   },
   { fieldId: FIELD_IDS.employeeTableReady },
+);
+
+LFForm.onFieldChange(
+  () => {
+    if (!employeePiiReady) {
+      console.info("[LF bridge] employee PII lookup ready");
+    }
+    employeePiiReady = true;
+    sendDataToTabulator();
+  },
+  { fieldId: FIELD_IDS.employeePiiReady },
+);
+
+LFForm.onFieldChange(
+  () => {
+    if (!employeeWorkprogramsReady) {
+      console.info("[LF bridge] employee workprogram lookup ready");
+    }
+    employeeWorkprogramsReady = true;
+    sendDataToTabulator();
+  },
+  { fieldId: FIELD_IDS.employeeWorkprogramsReady },
 );
 
 LFForm.onFieldChange(

@@ -32,6 +32,7 @@ type TemporaryWorkerRow = {
   Employee_Number: string
   Farm: string
   FullName: string
+  Workprogram: string
   PhoneNumber: string
   Email: string
   Saved: boolean
@@ -59,6 +60,16 @@ const AIRLINE_OPTIONS = [
   'Air Transat',
   'Flair Airlines',
   'Canadian North',
+]
+const NEW_WORKER_PROGRAM_OPTIONS = [
+  'Canadian',
+  'LMIA',
+  '(AG-GUAT)',
+  '(AG-JAM)',
+  '(AG-MEX)',
+  '(AG-OTHER)',
+  '(SAWP-JAM)',
+  '(SAWP-MEX)',
 ]
 const MAX_WORKERS_PER_ADD = 1000
 const LF_SANDBOX_ORIGIN = 'https://sandbox-forms.laserfiche.ca'
@@ -127,6 +138,8 @@ function buildRequestRows(
     return {
       Employee_Number: employeeNumber,
       FullName: String(employee.FullName ?? employee.fullName ?? ''),
+      Workprogram: String(employee.Workprogram ?? ''),
+      Birthdate: dateForGrid(employee.Birthdate),
       Status: String(employee.Status ?? employee.status ?? ''),
       Request_Status: requestStatus,
       Farm: String(request.Farm ?? ''),
@@ -573,6 +586,10 @@ function requestColumns(
   return [
     { title: 'Employee number', field: 'Employee_Number', minWidth: 112, widthGrow: 1.1, editable: false },
     { title: 'Full name', field: 'FullName', minWidth: 150, widthGrow: 1.5, editable: false },
+    { title: 'Work Program', field: 'Workprogram', minWidth: 130, widthGrow: 1.1, editable: false },
+    ...(role === 'HR'
+      ? [{ title: 'Birthdate', field: 'Birthdate', minWidth: 115, widthGrow: 0.9, editable: false }]
+      : []),
     {
       title: 'Status',
       field: 'Status',
@@ -646,7 +663,7 @@ function requestColumns(
       widthGrow: 1.3,
       editor: airlineEditor,
     },
-    { title: 'Origin', field: 'Flight_Origin', minWidth: 90, widthGrow: 0.8 },
+    { title: 'Origin', field: 'Flight_Origin', minWidth: 90, widthGrow: 0.8, visible: false },
     { title: 'Destination', field: 'Flight_Destination', minWidth: 110, widthGrow: 1.0 },
     {
       title: 'Flight date',
@@ -1072,6 +1089,7 @@ function App() {
           FullName: worker.FullName,
           Request_Status: 'Requested',
           Farm: worker.Farm,
+          Workprogram: worker.Workprogram,
           Preferred_Arrival_By: '',
           Flight_Number: '',
           Flight_Carrier: '',
@@ -1122,6 +1140,7 @@ function App() {
         Employee_Number: employeeNumber,
         Farm: workerFarm,
         FullName: '',
+        Workprogram: '',
         PhoneNumber: '',
         Email: '',
         Saved: false,
@@ -1136,7 +1155,7 @@ function App() {
   // Update the optional identity and contact fields for a new worker request.
   function updateTemporaryWorker(
     rowId: string,
-    field: 'FullName' | 'PhoneNumber' | 'Email',
+    field: 'FullName' | 'Workprogram' | 'PhoneNumber' | 'Email',
     value: string,
   ) {
     setTemporaryWorkers((current) =>
@@ -1278,7 +1297,7 @@ function App() {
               <div className="table-title"><span className="section-index">02</span><h2>Request additional workers</h2><span className="count-chip">{temporaryWorkers.length}</span></div>
             </div>
             <div className="worker-request-panel">
-              <p className="worker-request-intro">Add workers for one farm at a time. Select another farm and add more workers to build a multi-farm request. Names and contact details are optional.</p>
+              <p className="worker-request-intro">Add workers for one farm at a time. Select another farm and add more workers to build a multi-farm request. Names, work program, and contact details are optional.</p>
               <div className="worker-request-controls">
                 <label>
                   Farm
@@ -1312,13 +1331,19 @@ function App() {
                 <div className="worker-list-wrap">
                   <table className="worker-list">
                     <thead>
-                      <tr><th>Farm</th><th>Name (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th>Save status</th><th><span className="sr-only">Actions</span></th></tr>
+                      <tr><th>Farm</th><th>Name (optional)</th><th>Work Program (optional)</th><th>Phone number (optional)</th><th>Email (optional)</th><th>Save status</th><th><span className="sr-only">Actions</span></th></tr>
                     </thead>
                     <tbody>
                       {temporaryWorkers.map((worker, index) => (
                         <tr key={worker.__lfRowId}>
                           <td>{worker.Farm}</td>
                           <td><input aria-label={`Name for new worker request ${index + 1}`} value={worker.FullName} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'FullName', event.target.value)} disabled={saving || worker.Saved} /></td>
+                          <td>
+                            <select aria-label={`Work Program for new worker request ${index + 1}`} value={worker.Workprogram} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Workprogram', event.target.value)} disabled={saving || worker.Saved}>
+                              <option value="">Select a work program</option>
+                              {NEW_WORKER_PROGRAM_OPTIONS.map((program) => <option key={program} value={program}>{program}</option>)}
+                            </select>
+                          </td>
                           <td><input aria-label={`Phone number for new worker request ${index + 1}`} type="tel" value={worker.PhoneNumber} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'PhoneNumber', event.target.value)} disabled={saving || worker.Saved} /></td>
                           <td><input aria-label={`Email for new worker request ${index + 1}`} type="email" value={worker.Email} onChange={(event) => updateTemporaryWorker(worker.__lfRowId, 'Email', event.target.value)} disabled={saving || worker.Saved} /></td>
                           <td>{worker.Saved ? 'Saved' : 'Pending'}</td>
