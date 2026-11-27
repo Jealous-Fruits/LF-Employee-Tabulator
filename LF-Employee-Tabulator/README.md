@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Use **Preview with 3,000 sample requests** to exercise the employee grid and additional-worker tab without a Laserfiche form. Preview saves update the page locally and do not write form data.
+The app requires an embedded Laserfiche form to provide employee, worksite, flight, and role data. When run directly without the form connection, it remains in the waiting state.
 
 ## Deploy to GitHub Pages
 

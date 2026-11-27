@@ -246,8 +246,7 @@
   transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.button:focus-visible,
-.sample-link:focus-visible {
+.button:focus-visible {
   outline: 2px solid var(--coral);
   outline-offset: 2px;
 }
@@ -329,18 +328,6 @@
 .empty-state > span {
   color: var(--muted);
   font-size: 12px;
-}
-
-.sample-link {
-  margin-top: 6px;
-  border: 0;
-  border-bottom: 1px solid #c4775c;
-  padding: 3px 0;
-  background: transparent;
-  color: #9b523a;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 .table-footer {

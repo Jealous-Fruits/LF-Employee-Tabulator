@@ -670,7 +670,6 @@ function App() {
   const nextTemporaryEmployeeNumber = useRef(-1)
   const savingRef = useRef(false)
   const pendingOperation = useRef<PendingOperation | null>(null)
-  const previewMode = useRef(false)
   const pendingChangeCountRef = useRef(0)
   const hasUnsubmittedFormChangesRef = useRef(false)
   const role = useRef<UserRole | null>(null)
@@ -682,7 +681,6 @@ function App() {
   const [columns, setColumns] = useState<ColumnDefinition[]>([])
   const [rows, setRows] = useState<EmployeeRow[]>([])
   const [worksites, setWorksites] = useState<string[]>([])
-  const [previewModeActive, setPreviewModeActive] = useState(false)
   const [activeTab, setActiveTab] = useState<PageTab>('employee-requests')
   const [temporaryWorkers, setTemporaryWorkers] = useState<TemporaryWorkerRow[]>([])
   const [workerFarm, setWorkerFarm] = useState('')
@@ -888,8 +886,6 @@ function App() {
       }
 
       role.current = receivedRole
-      previewMode.current = false
-      setPreviewModeActive(false)
       const worksites = [...new Set(worksiteValues.map((worksite) => {
         if (typeof worksite === 'string') return worksite
         if (!worksite || typeof worksite !== 'object') return ''
@@ -1089,22 +1085,6 @@ function App() {
     }
     if (payload.requests.length === 0) return
 
-    // Preview saves update local baselines without sending messages to Laserfiche.
-    if (previewMode.current) {
-      for (const row of changedRows) {
-        originalRows.current.set(row.__lfRowId, requestSnapshot(row))
-        originalFlightRows.current.set(row.__lfRowId, flightSnapshot(row))
-      }
-      updatedRows.current.clear()
-      setTemporaryWorkers((current) =>
-        current.map((worker) =>
-          workerRowIds.includes(worker.__lfRowId) ? { ...worker, Saved: true } : worker,
-        ),
-      )
-      setChangeCount(0)
-      setSaveNotice(`${changedRows.length} employee change(s) and ${unsavedWorkers.length} new worker request(s) saved in preview.`)
-      return
-    }
     if (!formWindow.current) {
       setSaveNotice('The Laserfiche form connection is not ready. Reload the form and try again.')
       return
@@ -1173,7 +1153,7 @@ function App() {
     const worker = temporaryWorkers.find((entry) => entry.__lfRowId === rowId)
     if (!worker) return
 
-    if (!worker.Saved || previewMode.current) {
+    if (!worker.Saved) {
       setTemporaryWorkers((current) =>
         current.filter((entry) => entry.__lfRowId !== rowId),
       )
@@ -1198,78 +1178,10 @@ function App() {
     )
   }
 
-  // Load deterministic sample records for previewing the employee request grid.
-  function loadSample() {
-    const employees = Array.from({ length: 3000 }, (_, index) => ({
-      Employee_Number: `LF-${String(index + 1).padStart(4, '0')}`,
-      FullName: ['Morgan Chen', 'Avery Patel', 'Jordan Rivera', 'Riley Wilson'][index % 4],
-      Status: ['Active', 'Terminated', 'Active', 'Active'][index % 4],
-    }))
-    previewMode.current = true
-    setPreviewModeActive(true)
-    role.current = 'HR'
-    const worksites = ['Cedar Creek', 'Pine Ridge', 'Maple Grove', 'Willow Creek']
-    setWorksites(worksites)
-    const flights = employees.map((employee, index) => {
-      const status = [
-        '',
-        'Requested',
-        'Arrived',
-        'Request Return',
-        'Flight Booked',
-        'Flight Missed',
-      ][index % 6]
-      const hasFlight = BOOKED_REQUEST_STATUSES.has(status)
-      const day = String((index % 27) + 1).padStart(2, '0')
-      const flightDay = String(20 + (index % 8)).padStart(2, '0')
-      return {
-        Employee_Number: employee.Employee_Number,
-        Request_Status: status,
-        Farm: status ? worksites[index % worksites.length] : '',
-        Requested_Arrival: status ? { dateStr: `2026-12-${day}` } : '',
-        Flight_Number: hasFlight
-          ? `LF${420 + (index % 8)}`
-          : '',
-        Flight_Carrier: hasFlight ? 'Air Canada' : '',
-        Flight_Origin: hasFlight ? 'YVR' : '',
-        Flight_Destination: hasFlight ? 'YYZ' : '',
-        Flight_Date: hasFlight
-          ? { dateStr: `2026-12-${flightDay}`, timeStr: '08:30:00 AM' }
-          : '',
-      }
-    })
-    const sampleRows = buildRequestRows(employees, flights)
-    flightDefinitions.current = new Map(
-      flights.filter((flight) => flight.Flight_Number).map((flight) => [
-        String(flight.Flight_Number),
-        flight,
-      ]),
-    )
-    refreshFlightAutocompleteOptions(flightDefinitions.current, flightOptions.current)
-    originalRows.current = new Map(
-      sampleRows.map((row) => [row.__lfRowId, requestSnapshot(row)]),
-    )
-    originalFlightRows.current = new Map(
-      sampleRows.map((row) => [row.__lfRowId, flightSnapshot(row)]),
-    )
-    updatedRows.current.clear()
-    setChangeCount(0)
-    setColumns(requestColumns(
-      worksites,
-      flightOptions.current,
-      'HR',
-      flightDefinitions.current,
-    ))
-    setRows(sampleRows)
-    setRowCount(sampleRows.length)
-    setReady(true)
-    setMessage('')
-  }
-
   // Derive pending-save state and warn before leaving with unsubmitted form changes.
   const unsavedWorkerCount = temporaryWorkers.filter((worker) => !worker.Saved).length
   const pendingChangeCount = changeCount + unsavedWorkerCount
-  const shouldWarnBeforeUnload = ready && !previewModeActive &&
+  const shouldWarnBeforeUnload = ready &&
     (pendingChangeCount > 0 || saving || hasUnsubmittedFormChanges)
 
   // Keep the latest pending count available to the browser unload handler.
@@ -1282,10 +1194,9 @@ function App() {
     if (!shouldWarnBeforeUnload) return
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (previewModeActive ||
-        (pendingChangeCountRef.current === 0 &&
-          !savingRef.current &&
-          !hasUnsubmittedFormChangesRef.current)) {
+      if (pendingChangeCountRef.current === 0 &&
+        !savingRef.current &&
+        !hasUnsubmittedFormChangesRef.current) {
         return
       }
       event.preventDefault()
@@ -1294,7 +1205,7 @@ function App() {
 
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [previewModeActive, shouldWarnBeforeUnload])
+  }, [shouldWarnBeforeUnload])
 
   // Render the request heading, workflow tabs, active panel, and shared save controls.
   return (
@@ -1342,7 +1253,7 @@ function App() {
       >
         {activeTab === 'employee-requests' ? (
           <div id="employee-requests-panel" role="tabpanel" aria-labelledby="employee-requests-tab">
-            {/* Employee table, loading/preview state, and employee-change count. */}
+            {/* Employee table, loading state, and employee-change count. */}
         <div className="table-toolbar">
           <div className="table-title"><span className="section-index">01</span><h2>Employee hiring and flight requests</h2><span className="count-chip">{rowCount.toLocaleString()}</span></div>
         </div>
@@ -1351,9 +1262,6 @@ function App() {
             <div className="empty-mark" aria-hidden="true">↘</div>
             <strong>{message}</strong>
             <span>Waiting for employee, worksite, and flight data.</span>
-            <button className="sample-link" type="button" onClick={loadSample}>
-              Preview with 3,000 sample requests
-            </button>
           </div>
         ) : (
           <div className="table-host"><div ref={tableElement} /></div>
